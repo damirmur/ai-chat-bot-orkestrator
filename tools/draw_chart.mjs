@@ -6,7 +6,7 @@ export const definition = {
     type: "function",
     function: {
         name: "draw_chart",
-        description: "Визуализировать данные в виде столбчатой диаграммы. values может быть массивом массивов для нескольких серий. legend - названия серий.",
+        description: "Визуализировать данные в виде столбчатой диаграммы. Принимает либо (labels, values, legend), либо sourceData с контрактом данных.",
         parameters: {
             type: "object",
             properties: {
@@ -14,9 +14,10 @@ export const definition = {
                 labels: { type: "array", items: { type: "string" }, description: "Подписи по оси X (даты)" },
                 values: { type: "array", description: "Массив массивов для нескольких серий: [[1,2,3],[4,5,6]]" },
                 legend: { type: "array", items: { type: "string" }, description: "Названия серий для легенды" },
-                currency: { type: "string", description: "Валюта: USD, RUB" }
+                currency: { type: "string", description: "Валюта: USD, RUB" },
+                sourceData: { type: "array", description: "Данные от предыдущих шагов (контракт данных)" }
             },
-            required: ["title", "labels"]
+            required: ["title"]
         }
     }
 };
@@ -112,18 +113,131 @@ function generateSvg(title, labels, values, currency = 'USD', legend = null) {
 </svg>`;
 }
 
+/**
+ * Обработка контрактов данных из sourceData
+ * Поддерживаемые типы:
+ * - { type: 'time-series', labels: [...], values: [...] }
+ * - { labels: [...] } (от date_period)
+ * - { history: [...] } (от get_finance_data)
+ */
+function processSourceData(sourceData) {
+    console.log(`[draw_chart] Обработка sourceData (${sourceData.length} источников)`);
+    
+    let labels = [];
+    const allValues = [];
+    const legend = [];
+    let currency = null;
+    let hasUsdAsset = false;
+    let usdToRub = null;
+    
+    for (const item of sourceData) {
+        // Пропускаем промежуточные результаты
+        if (item.intermediate) {
+            console.log(`[draw_chart] Пропускаю промежуточный результат`);
+            continue;
+        }
+        
+        // Тип данных: time-series (контракт)
+        if (item.type === 'time-series') {
+            if (!labels.length && item.labels) {
+                labels = item.labels;
+            }
+            if (item.values) {
+                allValues.push(item.values);
+                legend.push(item.name || `Series ${allValues.length}`);
+            }
+            continue;
+        }
+        
+        // Метки времени (от date_period)
+        if (item.labels && Array.isArray(item.labels) && !labels.length) {
+            labels = item.labels;
+            console.log(`[draw_chart] Получены labels (${labels.length})`);
+        }
+        
+        // Исторические данные (от get_finance_data)
+        if (item.history && Array.isArray(item.history)) {
+            const vals = item.history
+                .map(d => d.price || d.close)
+                .filter(v => v != null);
+            
+            if (vals.length > 0) {
+                allValues.push(vals);
+                
+                const name = item.symbol || item.name || `Series ${allValues.length}`;
+                legend.push(name);
+                
+                // Проверить, нужно ли конвертировать в рубли
+                const isUsdAsset = item.symbol && (item.symbol.includes('-USD') || item.symbol.includes('=F'));
+                if (isUsdAsset) {
+                    hasUsdAsset = true;
+                }
+                
+                console.log(`[draw_chart] Получены values (${vals.length}) от ${name}`);
+            }
+        }
+        
+        // Курс валют для конвертации
+        if (item.price && (item.symbol === 'RUB=X' || item.symbol === 'USD/RUB')) {
+            usdToRub = parseFloat(item.price);
+            console.log(`[draw_chart] Курс USD/RUB: ${usdToRub}`);
+        }
+    }
+    
+    // Конвертация в рубли если нужно
+    let finalValues = allValues;
+    if (hasUsdAsset && usdToRub) {
+        console.log(`[draw_chart] Конвертация в рубли по курсу ${usdToRub}`);
+        finalValues = allValues.map(vals => vals.map(v => Math.round(v * usdToRub)));
+        currency = 'RUB';
+    }
+    
+    // Обрезка labels до минимальной длины values
+    if (labels.length > 0 && finalValues.length > 0) {
+        const minLen = Math.min(labels.length, ...finalValues.map(v => v.length));
+        labels = labels.slice(0, minLen);
+        finalValues = finalValues.map(v => v.slice(0, minLen));
+    }
+    
+    return {
+        labels,
+        values: finalValues.length === 1 ? finalValues[0] : finalValues,
+        legend: legend.length > 0 ? legend : null,
+        currency: currency || 'USD'
+    };
+}
+
 export async function handler(args) {
     const title = args.title || "Data Chart";
-    const labels = args.labels || [];
-    const values = args.values || [];
-    const legend = args.legend || null;
-    const currency = args.currency || 'USD';
+    let labels = args.labels || [];
+    let values = args.values || [];
+    let legend = args.legend || null;
+    let currency = args.currency || 'USD';
     
-    console.log(`[draw_chart] labels: ${labels.length}, values: ${values.length}, legend: ${legend ? legend.join(', ') : 'none'}`);
+    console.log(`[draw_chart] title: ${title}`);
     
+    // Если есть sourceData — обрабатываем через контракты данных
+    if (args.sourceData && Array.isArray(args.sourceData)) {
+        console.log(`[draw_chart] Использую sourceData (${args.sourceData.length} источников)`);
+        const processed = processSourceData(args.sourceData);
+        labels = processed.labels;
+        values = processed.values;
+        legend = processed.legend;
+        currency = processed.currency;
+    }
+    
+    // Валидация
     if (values.length === 0) {
         return JSON.stringify({ error: "Нет данных для графика" });
     }
+    
+    if (labels.length === 0) {
+        // Генерируем заглушки
+        const len = Array.isArray(values[0]) ? values[0].length : values.length;
+        labels = Array.from({ length: len }, (_, i) => `Point ${i+1}`);
+    }
+    
+    console.log(`[draw_chart] Итог: labels=${labels.length}, values=${values.length}, legend=${legend ? legend.join(', ') : 'none'}, currency=${currency}`);
     
     const svg = generateSvg(title, labels, values, currency, legend);
     const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();

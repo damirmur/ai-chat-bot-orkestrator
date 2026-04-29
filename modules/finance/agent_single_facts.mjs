@@ -1,14 +1,18 @@
+import { loadEnvFile } from 'node:process';
+import path from 'node:path';
+try { loadEnvFile(); } catch (e) {}
+
 export const definition = {
     type: "function",
     function: {
-        name: "agent_data_request",
-        description: "Получить финансовые данные и вернуть текстовый ответ. Поддерживает: биткоин, эфир, золото, нефть, доллар, евро, юань, рубли. Для криптовалют и металлов показывает цену в долларах и рублях.",
+        name: "agent_single_facts",
+        description: "АГЕНТ для получения единичных финансовых фактов (курсы валют, цены криптовалют, металлов). ИСПОЛЬЗУЙ для запросов: 'курс доллара', 'цена биткоина', 'сколько стоит золото'. Возвращает готовый текстовый ответ. НЕ используй get_finance_data напрямую - используй этот агент!",
         parameters: {
             type: "object",
             properties: {
                 query: {
                     type: "string",
-                    description: "Запрос: например 'курс биткоина', 'цена золота', 'курс доллара'"
+                    description: "Запрос: 'курс доллара', 'цена биткоина', 'сколько стоит золото'. ОБЯЗАТЕЛЬНО используй этот агент для единичных финансовых фактов!"
                 }
             },
             required: ["query"]
@@ -27,7 +31,6 @@ const ASSET_MAP = {
     'gold': { symbol: 'GC=F', name: 'Золото', symbolShort: 'XAU', isMetal: true },
     'серебро': { symbol: 'SI=F', name: 'Серебро', symbolShort: 'XAG', isMetal: true },
     'нефть': { symbol: 'CL=F', name: 'Нефть Brent', symbolShort: 'BRN', isCommodity: true },
-    '天然气': { symbol: 'NG=F', name: 'Природный газ', symbolShort: 'NG', isCommodity: true },
     'доллар': { symbol: 'RUB=X', name: 'Доллар США', symbolShort: 'USD', isCurrency: true },
     'евро': { symbol: 'EUR=RUB', name: 'Евро', symbolShort: 'EUR', isCurrency: true },
     'юань': { symbol: 'CNY=RUB', name: 'Китайский юань', symbolShort: 'CNY', isCurrency: true },
@@ -61,8 +64,8 @@ function formatUSD(price) {
 function formatRUB(price) {
     if (!price) return null;
     return Number(price).toLocaleString('ru-RU', {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 0
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
     });
 }
 
@@ -83,34 +86,30 @@ async function getPrice(toolsHandlers, symbol) {
 export async function handler(args, toolsHandlers) {
     const { query } = args;
     
-    console.log(`[agent_data_request] Запрос: ${query}`);
+    console.log(`[agent_single_facts] Запрос: ${query}`);
     
     const assets = extractAssets(query);
     
     if (assets.length === 0) {
-        console.log(`[agent_data_request] Не найдены активы, использую веб-поиск`);
+        console.log(`[agent_single_facts] Не найдены активы, использую веб-поиск`);
         const result = await toolsHandlers['web_search']({ query });
         return result;
     }
     
-    console.log(`[agent_data_request] Активы: ${assets.map(a => a.name).join(', ')}`);
+    console.log(`[agent_single_facts] Активы: ${assets.map(a => a.name).join(', ')}`);
     
-    // Определяем тип активов
     const hasCryptoOrMetal = assets.some(a => a.isCrypto || a.isMetal);
-    const hasCommodity = assets.some(a => a.isCommodity);
-    const hasCurrency = assets.some(a => a.isCurrency);
     
-    // Если есть крипта или металлы - получаем курс USD/RUB
     let usdToRub = null;
     if (hasCryptoOrMetal) {
         usdToRub = await getPrice(toolsHandlers, 'RUB=X');
-        console.log(`[agent_data_request] Курс USD/RUB: ${usdToRub}`);
+        console.log(`[agent_single_facts] Курс USD/RUB: ${usdToRub}`);
     }
     
     const results = [];
     
     for (const asset of assets) {
-        console.log(`[agent_data_request] Запрос цены: ${asset.symbol}`);
+        console.log(`[agent_single_facts] Запрос цены: ${asset.symbol}`);
         
         const price = await getPrice(toolsHandlers, asset.symbol);
         
@@ -119,7 +118,6 @@ export async function handler(args, toolsHandlers) {
             continue;
         }
         
-        // Для криптовалют и металлов - показываем USD и RUB
         if (asset.isCrypto || asset.isMetal) {
             let rubPrice = null;
             if (usdToRub) {
@@ -131,27 +129,32 @@ export async function handler(args, toolsHandlers) {
                 : `${asset.name}: $${formatUSD(price)} (курс рубля недоступен)`;
             
             results.push({ name: asset.name, line });
-            console.log(`[agent_data_request] ${line}`);
-        }
-        // Для commodities - только USD
-        else if (asset.isCommodity) {
+            console.log(`[agent_single_facts] ${line}`);
+        } else if (asset.isCommodity) {
             const line = `${asset.name}: $${formatUSD(price)}`;
             results.push({ name: asset.name, line });
-            console.log(`[agent_data_request] ${line}`);
-        }
-        // Для валют - показываем в рублях
-        else if (asset.isCurrency) {
+            console.log(`[agent_single_facts] ${line}`);
+        } else if (asset.isCurrency) {
             const line = `${asset.name}: ${formatRUB(price)} ₽`;
             results.push({ name: asset.name, line });
-            console.log(`[agent_data_request] ${line}`);
+            console.log(`[agent_single_facts] ${line}`);
         }
     }
     
-    // Формируем текстовый ответ
     const lines = results.map(r => r.line || `${r.name}: недоступен`);
-    const text = lines.join('\n');
+    let text = lines.join('\n');
     
-    console.log(`[agent_data_request] Результат:\n${text}`);
+    // Добавляем дату на которую запрашивали курс
+    const now = new Date();
+    const day = now.getDate();
+    const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+    const monthName = months[now.getMonth()];
+    const year = now.getFullYear();
+    const dateStr = `${day} ${monthName} ${year} года`;
+    
+    text += ` (курс на ${dateStr})`;
+    
+    console.log(`[agent_single_facts] Результат:\n${text}`);
     
     return JSON.stringify({ text });
 }

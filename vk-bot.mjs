@@ -10,7 +10,8 @@ await ensureModelReady();
 
 const { handleRequest } = await import('./orchestrator/handler.mjs');
 
-const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || "Ты — планировщик задач. Твоя единственная задача — составить план и вернуть его в формате JSON.\n\nВАЖНО: Текущая дата: 29 апреля 2026 года.\n\nОГРАНИЧЕНИЯ:\n- НЕ выполняй задачи сам — только планируй\n- НЕ используй tool_calls — верни текстом только JSON\n- НЕ переводи/не анализируй текст самим собой — используй model_tool в плане\n- ВСЕГДА используй source для передачи данных между шагами\n- НЕ передавай period и range вместе — выбери что-то одно!\n- draw_chart НЕЛЬЗЯ передавать labels или values напрямую — ТОЛЬКО source!\n- ВСЕГДА добавляй шаг для КАЖДОГО актива! Если биткоин и золото = 2 шага get_finance_data!\n\nФОРМАТ ОТВЕТА (только JSON, без текста):\n{\"steps\": [{\"tool\": \"имя_инструмента\", \"args\": {...}}, ...]}\n\nДОСТУПНЫЕ ИНСТРУМЕНТЫ:\n- date_period — вычислить даты для периода (period: \"2025\" или range: \"1y\", НЕ ОБА)\n- agent_data_request — получить данные (финансы, погода, новости)\n- agent_fin_period_table_graph — построить график/таблицу за период\n- model_tool — перевод/анализ/форматирование текста (action: translate, summarize, analyze, format, extract, compare, explain, rewrite)\n- draw_chart — столбчатая диаграма (поддерживает несколько серий)\n- render_table — таблица\n- get_finance_data — финансовые данные (symbol: BTC-USD, GC=F, RUB=X, EUR=RUB, type: current/historical)\n- web_search — веб-поиск\n\nПРАВИЛА:\n- date_period с range=\"1y\" = последние 12 месяцев (апрель 2025 — апрель 2026)\n- date_period с period=\"2025\" = год 2025 (Янв 2025 — Дек 2025)\n- draw_chart с source=[0,1,2,3] для нескольких активов:\n  - source[0] = date_period (labels)\n  - source[1] = первый актив (BTC)\n  - source[2] = второй актив (GC)\n  - source[3] = курс валюты (если нужен)\n- ВАЖНО: source массив должен включать ВСЕ индексы шагов с данными!\n- source=[0,1,2] означает: 0=labels, 1=BTC, 2=GC\n- draw_chart АРГУМЕНТЫ: {\"title\": \"Название, RUB\", \"source\": [0,1,2]}\n\nПРИМЕРЫ:\nЗапрос: \"Курс биткоина\" → {\"steps\": [{\"tool\": \"agent_data_request\", \"args\": {\"query\": \"курс биткоина\"}}]}\nЗапрос: \"Курс золота за год\" → {\"steps\": [{\"tool\": \"date_period\", \"args\": {\"range\": \"1y\", \"target\": \"chart\"}}, {\"tool\": \"get_finance_data\", \"args\": {\"symbol\": \"GC=F\", \"type\": \"historical\", \"source\": 0}}, {\"tool\": \"draw_chart\", \"args\": {\"title\": \"Золото, USD\", \"source\": 0}}]}\nЗапрос: \"BTC и золото в рублях на одном графике\" → {\"steps\": [{\"tool\": \"date_period\", \"args\": {\"range\": \"1y\", \"target\": \"chart\"}}, {\"tool\": \"get_finance_data\", \"args\": {\"symbol\": \"BTC-USD\", \"type\": \"historical\", \"source\": 0}}, {\"tool\": \"get_finance_data\", \"args\": {\"symbol\": \"GC=F\", \"type\": \"historical\", \"source\": 0}}, {\"tool\": \"get_finance_data\", \"args\": {\"symbol\": \"RUB=X\", \"type\": \"current\"}}, {\"tool\": \"draw_chart\", \"args\": {\"title\": \"BTC и Золото, RUB\", \"source\": [0,1,2,3]}}]}\nЗапрос: \"Переведи\" → {\"steps\": [{\"tool\": \"model_tool\", \"args\": {\"action\": \"translate\", \"text\": \"...\", \"target_lang\": \"ru\"}}]}\n\nЕсли не нужен инструмент — верни просто текст (не JSON).";
+const { FINANCE_PROMPT } = await import('./modules/finance/prompts.mjs');
+const SYSTEM_PROMPT = process.env.SYSTEM_PROMPT || FINANCE_PROMPT;
 
 const vk = new VK({ token: process.env.VK_TOKEN });
 const API_URL = (process.env.LM_STUDIO_URL.replace(/\/$/, '') || 'http://localhost:1234') + '/chat/completions';
@@ -19,11 +20,12 @@ const API_TOKEN = process.env.LM_STUDIO_API_KEY || 'lm-studio';
 const toolsDefinition = [];
 const toolsHandlers = {};
 
-// --- АВТОЗАГРУЗКА ИНСТРУМЕНТОВ ---
+// --- АВТОЗАГРУЗКА ИНСТРУМЕНТОВ И АГЕНТОВ ---
 async function loadTools() {
+    // Загрузка из tools/
     const toolsPath = path.join(process.cwd(), 'tools');
     if (!fs.existsSync(toolsPath)) fs.mkdirSync(toolsPath);
-    const files = fs.readdirSync(toolsPath).filter(file => file.endsWith('.mjs'));
+    let files = fs.readdirSync(toolsPath).filter(file => file.endsWith('.mjs'));
     for (const file of files) {
         try {
             const tool = await import('file://' + path.join(toolsPath, file).replace(/\\/g, '/'));
@@ -34,6 +36,24 @@ async function loadTools() {
             }
         } catch (err) {
             console.error('[ERROR] Failed to load tool ' + file + ': ' + err.message);
+        }
+    }
+    
+    // Загрузка агентов из modules/finance/
+    const agentsPath = path.join(process.cwd(), 'modules', 'finance');
+    if (fs.existsSync(agentsPath)) {
+        files = fs.readdirSync(agentsPath).filter(file => file.endsWith('.mjs') && file.startsWith('agent_'));
+        for (const file of files) {
+            try {
+                const agent = await import('file://' + path.join(agentsPath, file).replace(/\\/g, '/'));
+                if (agent.definition && agent.handler) {
+                    toolsDefinition.push(agent.definition);
+                    toolsHandlers[agent.definition.function.name] = agent.handler;
+                    console.log('[OK] Agent loaded: ' + agent.definition.function.name);
+                }
+            } catch (err) {
+                console.error('[ERROR] Failed to load agent ' + file + ': ' + err.message);
+            }
         }
     }
 }

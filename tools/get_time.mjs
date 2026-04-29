@@ -11,7 +11,8 @@ export const definition = {
 export async function handler(args) {
     try {
         const time = execSync(`powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'"`).toString().trim();
-        return JSON.stringify({ text: time });
+        // Промежуточный результат (не финальный ответ)
+        return JSON.stringify({ intermediate: true, text: time });
     } catch (e) {
         return JSON.stringify({ error: `Ошибка получения времени: ${e.message}` });
     }

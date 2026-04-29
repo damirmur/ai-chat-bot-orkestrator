@@ -20,15 +20,15 @@ function parseJsonPlan(response) {
     return null;
 }
 
-function processResults(results, history) {
+function processResults(resultsArray, history) {
     // Проверяем на ошибки
     const errors = [];
-    for (const { toolName, result } of results) {
+    for (const item of resultsArray) {
         try {
-            const parsed = JSON.parse(result);
+            const parsed = JSON.parse(item.result);
             if (parsed.error) {
-                errors.push({ tool: toolName, error: parsed.error });
-                console.log(`[Handler] Ошибка: ${toolName}: ${parsed.error}`);
+                errors.push({ tool: item.toolName, error: parsed.error });
+                console.log(`[Handler] Ошибка: ${item.toolName}: ${parsed.error}`);
             }
         } catch {}
     }
@@ -38,31 +38,34 @@ function processResults(results, history) {
     }
     
     // Изображения
-    const images = buildResponse(results).filter(r => r.type === 'image');
+    const images = buildResponse(resultsArray).filter(r => r.type === 'image');
     if (images.length > 0) {
         return { type: 'image', data: images };
     }
     
-    // Текст от agent_data_request
-    for (const { toolName, result } of results) {
+    // Любой текстовый результат — возвращаем ПОСЛЕДНИЙ (финальный ответ)
+    // Пропускаем промежуточные результаты (intermediate: true)
+    let lastTextResult = null;
+    for (const item of resultsArray) {
         try {
-            const parsed = JSON.parse(result);
-            if (parsed.text && toolName === 'agent_data_request') {
-                return { type: 'text', content: parsed.text };
+            const parsed = JSON.parse(item.result);
+            // Пропускаем промежуточные результаты
+            if (parsed.intermediate) {
+                console.log(`[Handler] Пропускаю промежуточный результат: ${item.toolName}`);
+                continue;
             }
-        } catch {}
-    }
-    
-    // Любой текстовый результат
-    for (const { result } of results) {
-        try {
-            const parsed = JSON.parse(result);
-            if (parsed.text) return { type: 'text', content: parsed.text };
+            if (parsed.text) {
+                lastTextResult = parsed.text;
+            }
         } catch {
-            if (result && typeof result === 'string' && result.length < 1000) {
-                return { type: 'text', content: result };
+            if (item.result && typeof item.result === 'string' && item.result.length < 1000) {
+                lastTextResult = item.result;
             }
         }
+    }
+    
+    if (lastTextResult) {
+        return { type: 'text', content: lastTextResult };
     }
     
     return { type: 'text', content: 'Запрос выполнен.' };
@@ -151,10 +154,15 @@ export async function handleRequest(query, toolsHandlers, askLM, systemPrompt) {
         
         if (processed.type === 'image') {
             console.log('[Handler] Запрос успешно выполнен (image)');
-            return processed.data;
+            // Возвращаем изображения и отдельным сообщением "Запрос успешно завершён"
+            return [...processed.data, { type: 'text', content: 'Запрос успешно завершён.' }];
         }
         console.log('[Handler] Запрос успешно выполнен');
-        return [{ type: 'text', content: processed.content + '\n\nЗапрос успешно завершён.' }];
+        // Возвращаем основной ответ и отдельным сообщением "Запрос успешно завершён"
+        return [
+            { type: 'text', content: processed.content },
+            { type: 'text', content: 'Запрос успешно завершён.' }
+        ];
     }
     
     return [];

@@ -12,6 +12,7 @@ export const definition = {
         }
     }
 };
+
 import { loadEnvFile } from 'node:process';
 try { loadEnvFile(); } catch (e) {соnsole.warn("⚠️ Не удалось загрузить .env файл. Убедитесь, что он существует и содержит необходимые переменные."); } 
 
@@ -40,7 +41,10 @@ export async function handler(args) {
             return JSON.stringify({ text: "По вашему запросу ничего не найдено." });
         }
 
-        return JSON.stringify({ results });
+        // Format results as readable text
+        const text = results.map((r, i) => `${i+1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`).join('\n\n');
+        return JSON.stringify({ text: text });
+        
     } catch (error) {
         return JSON.stringify({ error: `Ошибка веб-поиска: ${error.message}` });
     }

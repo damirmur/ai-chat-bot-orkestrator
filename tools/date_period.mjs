@@ -114,7 +114,9 @@ export async function handler(args) {
     
     console.log('[date_period] periodType=' + periodType + ', labels=' + labels.length + ', start: ' + formatDateISO(startDate) + ', end: ' + formatDateISO(endDate || now));
     
+    // Промежуточный результат (не финальный ответ)
     return JSON.stringify({
+        intermediate: true,
         labels: labels,
         startDate: formatDateISO(startDate),
         endDate: formatDateISO(endDate || now),
