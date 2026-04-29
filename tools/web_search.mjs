@@ -16,15 +16,13 @@ import { loadEnvFile } from 'node:process';
 try { loadEnvFile(); } catch (e) {соnsole.warn("⚠️ Не удалось загрузить .env файл. Убедитесь, что он существует и содержит необходимые переменные."); } 
 
 export async function handler(args) {
-    // Берем URL из системного окружения (то, что мы прописывали в .env)
     const baseUrl = process.env.SEARCH_URL;
     
     if (!baseUrl) {
-        return "Ошибка: Переменная SEARCH_URL не найдена в .env";
+        return JSON.stringify({ error: "Переменная SEARCH_URL не найдена в .env" });
     }
 
     try {
-        // Добавляем format=json для SearXNG
         const fullUrl = `${baseUrl}?q=${encodeURIComponent(args.query)}&format=json`;
         
         const response = await fetch(fullUrl);
@@ -32,7 +30,6 @@ export async function handler(args) {
         
         const data = await response.json();
         
-        // Берем топ-4 результата и оставляем только суть
         const results = data.results?.slice(0, 4).map(r => ({
             title: r.title,
             snippet: r.content,
@@ -40,11 +37,11 @@ export async function handler(args) {
         }));
 
         if (!results || results.length === 0) {
-            return "По вашему запросу ничего не найдено.";
+            return JSON.stringify({ text: "По вашему запросу ничего не найдено." });
         }
 
-        return JSON.stringify(results);
+        return JSON.stringify({ results });
     } catch (error) {
-        return `Ошибка при выполнении веб-поиска: ${error.message}`;
+        return JSON.stringify({ error: `Ошибка веб-поиска: ${error.message}` });
     }
 }

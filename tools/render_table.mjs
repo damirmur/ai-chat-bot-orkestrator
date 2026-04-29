@@ -91,7 +91,12 @@ function generateSvgTable(title, data, columns) {
 export async function handler(args) {
     const { data, title, columns: customColumns } = args;
     
-    console.log(`[ render_table ] input data:`, Array.isArray(data) ? `${data.length} rows` : typeof data);
+    console.log(`[ render_table ] title:`, title);
+    console.log(`[ render_table ] data:`, typeof data, Array.isArray(data) ? `(${data.length} rows)` : '');
+    console.log(`[ render_table ] columns:`, customColumns ? customColumns.length : 'auto');
+    if (Array.isArray(data) && data.length > 0) {
+        console.log(`[ render_table ] first row:`, data[0]);
+    }
     
     if (!Array.isArray(data)) {
         return JSON.stringify({ error: "data должен быть массивом" });

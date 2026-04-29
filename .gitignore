@@ -4,3 +4,4 @@ bot.log
 *.log
 .DS_Store
 charts/
+*.txt
