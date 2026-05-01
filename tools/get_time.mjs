@@ -16,7 +16,7 @@ export async function handler(args) {
     try {
         const time = Temporal.Now.instant().toString();
         log('INFO', 'get_time', 'result', time);
-        return JSON.stringify({ intermediate: true, text: time });
+        return JSON.stringify({ text: time });
     } catch (e) {
         log('ERROR', 'get_time', 'error', e.message);
         return JSON.stringify({ error: `Ошибка получения времени: ${e.message}` });

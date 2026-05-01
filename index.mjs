@@ -85,7 +85,7 @@ async function askLM(messages, useTools = true) {
         messages: messages,
         temperature: 0.3,
         max_tokens: 1500,
-        ...(useTools && { tools: toolsDefinition, tool_choice: "auto" })
+...(useTools && { tools: toolsDefinition })
     };
     const API_URL = (process.env.LM_STUDIO_URL.replace(/\/$/, '') || 'http://localhost:1234') + '/chat/completions';
     let rawData = null;
