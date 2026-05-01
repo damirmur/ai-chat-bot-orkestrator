@@ -1,3 +1,5 @@
+import { log } from '../logger.mjs';
+
 export const definition = {
     type: "function",
     function: {
@@ -35,7 +37,7 @@ export async function handler(args) {
     const now = new Date();
     const today = formatDateISO(now);
     
-    console.log('[date_period] Input:', JSON.stringify({ period, range, target }));
+    log('INFO', 'date_period', 'input', JSON.stringify({ period, range, target }));
     
     let labels = [];
     let startDate, endDate;
@@ -112,9 +114,8 @@ export async function handler(args) {
         }
     }
     
-    console.log('[date_period] periodType=' + periodType + ', labels=' + labels.length + ', start: ' + formatDateISO(startDate) + ', end: ' + formatDateISO(endDate || now));
+    log('INFO', 'date_period', 'result', `periodType=${periodType}, labels=${labels.length}, start=${formatDateISO(startDate)}, end=${formatDateISO(endDate || now)}`);
     
-    // Промежуточный результат (не финальный ответ)
     return JSON.stringify({
         intermediate: true,
         labels: labels,

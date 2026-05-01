@@ -1,3 +1,4 @@
+import { log } from '../logger.mjs';
 import { executePlan } from './executor.mjs';
 import { buildResponse } from './response.mjs';
 
@@ -6,14 +7,19 @@ const MAX_RETRIES = 5;
 function parseJsonPlan(response) {
     if (!response) return null;
     
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+    let s = response.trim();
+    s = s.replace(/^```(?:json)?/i, '').replace(/```$/g, '').trim();
     
     try {
-        const parsed = JSON.parse(jsonMatch[0]);
+        const parsed = JSON.parse(s);
         if (parsed.steps && Array.isArray(parsed.steps)) {
-            console.log(`[Handler] Найден JSON-план: ${parsed.steps.length} шагов`);
-            return parsed;
+            // Normalize steps: accept both "tool" and "action" as the tool name
+            const steps = parsed.steps.map(st => ({
+                tool: st.tool || st.action,
+                args: st.args || {}
+            }));
+            log('INFO', 'handler', 'plan_found', `JSON‑план: ${steps.length} шагов`);
+            return { steps };
         }
     } catch (e) {}
     
@@ -21,14 +27,13 @@ function parseJsonPlan(response) {
 }
 
 function processResults(resultsArray, history) {
-    // Проверяем на ошибки
     const errors = [];
     for (const item of resultsArray) {
         try {
             const parsed = JSON.parse(item.result);
             if (parsed.error) {
                 errors.push({ tool: item.toolName, error: parsed.error });
-                console.log(`[Handler] Ошибка: ${item.toolName}: ${parsed.error}`);
+                log('ERROR', 'handler', 'tool_error', `${item.toolName}: ${parsed.error}`);
             }
         } catch {}
     }
@@ -37,21 +42,17 @@ function processResults(resultsArray, history) {
         return { type: 'error', errors };
     }
     
-    // Изображения
     const images = buildResponse(resultsArray).filter(r => r.type === 'image');
     if (images.length > 0) {
         return { type: 'image', data: images };
     }
     
-    // Любой текстовый результат — возвращаем ПОСЛЕДНИЙ (финальный ответ)
-    // Пропускаем промежуточные результаты (intermediate: true)
     let lastTextResult = null;
     for (const item of resultsArray) {
         try {
             const parsed = JSON.parse(item.result);
-            // Пропускаем промежуточные результаты
             if (parsed.intermediate) {
-                console.log(`[Handler] Пропускаю промежуточный результат: ${item.toolName}`);
+                log('INFO', 'handler', 'skip_intermediate', item.toolName);
                 continue;
             }
             if (parsed.text) {
@@ -71,29 +72,31 @@ function processResults(resultsArray, history) {
     return { type: 'text', content: 'Запрос выполнен.' };
 }
 
-export async function handleRequest(query, toolsHandlers, askLM, systemPrompt) {
-    console.log(`[Handler] Получен запрос: ${query}`);
+export async function handleRequest(query, toolsHandlers, askLM, systemPrompt, peerId, conversationHistory = []) {
+    log('INFO', 'handler', 'request_received', query);
     
     let currentQuery = query;
     let attempts = 0;
     
     while (attempts < MAX_RETRIES) {
         attempts++;
-        console.log(`[Handler] Попытка ${attempts}/${MAX_RETRIES}`);
+        log('INFO', 'handler', 'attempt', `Попытка ${attempts}/${MAX_RETRIES}`);
         
+        // Включаем историю разговора в сообщения
         const history = [
             { role: 'system', content: systemPrompt },
+            ...conversationHistory,
+            { role: 'system', content: `Текущий peerId отправителя: ${peerId}` },
             { role: 'user', content: currentQuery }
         ];
         
         const response = await askLM(history);
         let responseText = response.content || '';
         
-        console.log(`[Handler] Ответ модели (${responseText.length} символов):`, responseText.substring(0, 300));
+        log('INFO', 'handler', 'model_response', `Ответ модели (${responseText.length} символов): ${responseText.substring(0, 300)}`);
         
-        // Если content пустой но есть tool_calls - fallback на старый формат
         if (!responseText && response.tool_calls && response.tool_calls.length > 0) {
-            console.log(`[Handler] Fallback: использую tool_calls (${response.tool_calls.length} шт)`);
+            log('INFO', 'handler', 'fallback', `использую tool_calls (${response.tool_calls.length} шт)`);
             
             const planFromCalls = {
                 steps: response.tool_calls.map(tc => ({
@@ -102,7 +105,7 @@ export async function handleRequest(query, toolsHandlers, askLM, systemPrompt) {
                 }))
             };
             
-            console.log(`[Handler] План из tool_calls:`, JSON.stringify(planFromCalls.steps.map(s => s.tool)));
+            log('INFO', 'handler', 'plan_from_tool_calls', planFromCalls.steps.map(s => s.tool).join(', '));
             
             const results = await executePlan(planFromCalls.steps, toolsHandlers);
             const processed = processResults(results, history);
@@ -117,27 +120,29 @@ export async function handleRequest(query, toolsHandlers, askLM, systemPrompt) {
             }
             
             if (processed.type === 'image') {
-                console.log('[Handler] Запрос успешно выполнен (fallback image)');
+                log('INFO', 'handler', 'done', 'Запрос успешно выполнен (image)');
                 return processed.data;
             }
-            console.log('[Handler] Запрос успешно выполнен (fallback)');
+            log('INFO', 'handler', 'done', 'Запрос успешно выполнен (fallback)');
             return [{ type: 'text', content: processed.content + '\n\nЗапрос успешно завершён.' }];
         }
         
-        // Пытаемся распарсить JSON-план
         const plan = parseJsonPlan(responseText);
         
-        console.log('[Handler] Получен план:', JSON.stringify(plan));
+        log('INFO', 'handler', 'plan_received', JSON.stringify(plan));
         
         if (!plan) {
-            if (responseText.trim()) {
-                return [{ type: 'text', content: responseText }];
+            if (attempts === MAX_RETRIES) {
+                if (responseText.trim()) {
+                    return [{ type: 'text', content: responseText }];
+                }
+                return [{ type: 'text', content: 'Не удалось получить ответ от модели.' }];
             }
-            return [];
+            currentQuery = `Ошибка: пустой ответ. Повторите для "${query}", но обязательно верните JSON-план {"steps": [...]}, а не текст.`;
+            continue;
         }
         
-        // Выполняем план
-        console.log(`[Handler] Выполняю план:`, plan.steps.map(s => s.tool).join(' → '));
+        log('INFO', 'handler', 'executing_plan', plan.steps.map(s => s.tool).join(' → '));
         const results = await executePlan(plan.steps, toolsHandlers);
         
         const processed = processResults(results, history);
@@ -146,19 +151,17 @@ export async function handleRequest(query, toolsHandlers, askLM, systemPrompt) {
             if (attempts < MAX_RETRIES) {
                 const errDetails = processed.errors.map(e => `${e.tool}: ${e.error}`).join('; ');
                 currentQuery = `Ошибка: ${errDetails}. Составь новый план.`;
-                console.log(`[Handler] Перепланирование: ${currentQuery}`);
+                log('INFO', 'handler', 'replan', currentQuery);
                 continue;
             }
             return [{ type: 'text', content: `Не удалось выполнить. Причины: ${processed.errors.map(e => e.error).join('; ')}` }];
         }
         
         if (processed.type === 'image') {
-            console.log('[Handler] Запрос успешно выполнен (image)');
-            // Возвращаем изображения и отдельным сообщением "Запрос успешно завершён"
+            log('INFO', 'handler', 'done', 'Запрос успешно выполнен (image)');
             return [...processed.data, { type: 'text', content: 'Запрос успешно завершён.' }];
         }
-        console.log('[Handler] Запрос успешно выполнен');
-        // Возвращаем основной ответ и отдельным сообщением "Запрос успешно завершён"
+        log('INFO', 'handler', 'done', 'Запрос успешно выполнен');
         return [
             { type: 'text', content: processed.content },
             { type: 'text', content: 'Запрос успешно завершён.' }

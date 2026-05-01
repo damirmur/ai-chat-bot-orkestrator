@@ -1,113 +1,14 @@
-# AGENTS.md
+**AGENTS.md**
 
-## Команды
+- **Start the bot** – `npm run start` runs `communication/vk-bot.mjs`.
+- **Run the terminal chat** – `npm run terminal` runs `communication/terminal-chat.mjs`.
+- **Watch‑mode development** – `npm run dev:bot` or `npm run dev:term` restarts the respective script on file changes (uses `node --watch`).
+- **List available tools** – `node list_tools.mjs` prints all tool modules under `tools/`.
+- **Execute a specific tool** – `node tools/<tool_name>.mjs` (e.g., `node tools/weather_api.mjs`).
+- **Tool loading** – The orchestrator loads tools based on `orchestrator/tools.config.json`; an empty file means *all* modules in `tools/` are auto‑registered.
+- **State persistence** – Runtime state is stored in `state.json`; editing this file while the server is running may cause inconsistent behavior.
+- **Logging** – All logs are written to the `logs/` directory; each run creates a timestamped file.
+- **No test suite** – `npm test` is a placeholder; there are no automated tests in this repo.
+- **Environment** – Copy `.env_example` to `.env` for required variables; the bot expects `OPENAI_API_KEY` and VK credentials if using the VK bot.
 
-- `npm start` — запуск бота
-- `npm run dev` — dev с автоперезагрузкой при изменении .env
-
-## Архитектура
-
-- `vk-bot.mjs` — точка входа, загрузка, приём/отправка сообщений
-- `orchestrator/` — обработка запросов
-  - `handler.mjs` — парсит JSON-план, управляет выполнением, обрабатывает ошибки (до 5 попыток)
-  - `executor.mjs` — выполняет план шаг за шагом
-  - `response.mjs` — формирует ответы (текст/изображения)
-- `tools/` — инструменты: draw_chart, render_table, get_finance_data, web_search, get_system_time, model_tool
-- `agents/` — агенты: agent_data_request, agent_fin_period_table_graph
-- `lm_model_manager.mjs` — проверяет/загружает модель при старте
-
-## Как работает
-
-### Общая схема
-
-1. **Вход:** Пользователь пишет сообщение в VK → `vk-bot.mjs` получает `message_new`.
-2. **Маршрутизация:** Бот проверяет упоминание (клуб или "бот"). Если совпадает — отправляет текст в `orchestrator/handler.mjs`.
-3. **Планирование:** Модель (LM Studio) получает запрос и системный промпт. Она возвращает либо чистый текст, либо JSON-план (массив `steps` с полями `tool` и `args`).
-4. **Выполнение:** `executor.mjs` проходит по шагам плана, вызывает соответствующие функции из `toolsHandlers` и собирает результаты.
-5. **Ответ:** `handler.mjs` анализирует результаты через `response.mjs` и отправляет пользователю текст или изображения.
-
-### Варианты запросов
-
-#### 1. Простой текстовый запрос (без инструментов)
-*   **Пример:** "Привет, как дела?"
-*   **Логика:**
-    *   Модель не генерирует JSON-план и не использует `tool_calls`.
-    *   `handler.mjs` проверяет `parseJsonPlan` — возвращается `null`.
-    *   Бот берет `responseText` (ответ модели) и отправляет его пользователю как есть.
-
-#### 2. Запрос с использованием инструментов (Tool Calls)
-*   **Пример:** "Какая погода в Москве?" или "Нарисуй график цены биткоина".
-*   **Логика:**
-    *   Модель возвращает JSON-план: `{ "steps": [ { "tool": "web_search", "args": { "query": "погода Москва" } } ] }`.
-    *   `executor.mjs` находит `toolsHandlers['web_search']`, выполняет его.
-    *   Если инструмент возвращает `{ text: "..." }` — это текстовый ответ.
-    *   Если `{ image: "data:image/png;base64,..." }` — `response.mjs` преобразует это в тип `image`.
-    *   **Source:** Если у шага есть `source` (номер предыдущего шага), executor передает результат предыдущего шага в `sourceData` текущего.
-
-#### 3. Запрос, требующий работы Агента
-*   **Пример:** "Сравни курс ETH и BTC за последний месяц".
-*   **Логика:**
-    *   Модель вызывает инструмент-агент (например, `agent_data_request`).
-    *   `executor.mjs` видит, что инструмент требует контекста, и вызывает `handler(args, toolsHandlers)`.
-    *   Агент **внутри себя** может вызывать другие инструменты (например, `get_finance_data` или `web_search`) через полученный `toolsHandlers`.
-    *   Агент возвращает финальный результат (текст или график).
-
-#### 4. Запрос с ошибкой (Retry Logic)
-*   **Логика:**
-    *   `processResults` в `handler.mjs` находит поле `error` в результатах.
-    *   Если попыток меньше 5 (`MAX_RETRIES`), формируется новый запрос: `"Ошибка: ... Составь новый план без проблемных шагов."`.
-    *   Цикл повторяется: модель получает историю с ошибкой и пытается построить новый план.
-    *   Если 5 попыток исчерпано — возвращается сообщение с описанием ошибок.
-
-#### 5. Смешанный запрос (Текст + Изображение)
-*   **Логика:**
-    *   План выполняется, результаты собираются.
-    *   Если есть изображения (`type === 'image'`), они отправляются первыми.
-    *   Затем отправляется текстовый ответ и обязательное сообщение `"Запрос успешно завершён."`.
-
-### Ключевые технические моменты
-
-*   **Различие сигнатур:** В `executor.mjs` проверяется, нужно ли передавать `toolsHandlers` вторым аргументом. Это нужно для `model_tool` (чтобы вызвать `askLM`) и агентов.
-*   **Промежуточные результаты:** Если инструмент возвращает `{ intermediate: true }`, `handler.mjs` игнорирует этот текст при формировании финального ответа.
-*   **Fallback:** Если модель вернула `tool_calls` (стандарт OpenAI), но не вернула текст, `handler.mjs` собирает план из `tool_calls` вручную.
-
-## Важно
-
-- `.env` обязателен: VK_TOKEN, GROUP_ID, CHAT_PEER_ID, LM_STUDIO_URL, LM_STUDIO_API_KEY
-- Sharp генерирует SVG → PNG локально для графиков/таблиц
-- Все инструменты возвращают JSON с полем `error` при проблемах
-- Graceful shutdown: SIGTERM/SIGINT корректно останавливают бота
-- Бот обязательно отвечает пользователю на русском языке
-
-## Требования к коду
-
-- Модули в `orchestrator/` должны быть чистыми, не содержать специфичного управления агентами и инструментами (допустимо различение сигнатур вызова по техническим признакам)
-
-## Переменные LM_STUDIO
-
-**Обязательные:**
-- `LM_STUDIO_URL` — http://localhost:1234
-- `LM_STUDIO_API_KEY` — токен из LM Studio Settings → Developer
-
-**Параметры модели:**
-- `LM_MODEL_KEY=qwen3.5-9b` — какую модель загружать
-- `LM_CONTEXT_LENGTH=65536` — размер контекста
-- `LM_PARALLEL=4` — параллельные сессии
-- `LM_GPU_OFFLOAD=1` — 1 = полная загрузка на GPU
-- `LM_TEMPERATURE=0.5` — температура
-- `LM_MAX_TOKENS=1500` — макс токенов
-
-## Добавление инструмента/агента
-
-**Инструменты** — в `tools/name.mjs`:
-```js
-export const definition = { type: "function", function: { name, description, parameters: {...} } };
-export async function handler(args) { return JSON.stringify({ error: "..." }) или { text: "..." } или { image: "..." }); }
-```
-
-**Агенты** — в `agents/name.mjs`. Агент получает `toolsHandlers`:
-```js
-export async function handler(args, toolsHandlers) { ... }
-```
-
-**model_tool** — особый инструмент, использует модель для перевода/анализа/форматирования текста.
+These points capture the non‑obvious commands, configuration quirks, and runtime expectations that an OpenCode agent would otherwise miss.

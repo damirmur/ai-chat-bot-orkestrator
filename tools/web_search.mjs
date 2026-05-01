@@ -1,33 +1,47 @@
+import { log } from '../logger.mjs';
+
 export const definition = {
     type: "function",
     function: {
         name: "web_search",
-        description: "Поиск актуальной информации в интернете (новости, события, факты).",
+        description: "Веб-поиск для получения сырых данных. Используйте вместе с fact_extractor для извлечения структурированной информации.",
         parameters: {
             type: "object",
             properties: {
-                query: { type: "string", description: "Поисковый запрос" }
+                query: { type: "string", description: "Текст для поиска" }
             },
             required: ["query"]
         }
     }
 };
 
-import { loadEnvFile } from 'node:process';
-try { loadEnvFile(); } catch (e) {соnsole.warn("⚠️ Не удалось загрузить .env файл. Убедитесь, что он существует и содержит необходимые переменные."); } 
-
 export async function handler(args) {
-    const baseUrl = process.env.SEARCH_URL;
+    // Use searchUrl from args if provided, otherwise try cache/env
+    let searchUrl = args.searchUrl;
     
-    if (!baseUrl) {
-        return JSON.stringify({ error: "Переменная SEARCH_URL не найдена в .env" });
+    if (!searchUrl && global.__envCache__?.SEARCH_URL) {
+        console.log('[ENV FALLBACK] Using SEARCH_URL from global cache');
+        searchUrl = global.__envCache__.SEARCH_URL;
+    } else if (!searchUrl) {
+        searchUrl = process.env.SEARCH_URL;
+        
+        if (searchUrl !== undefined && searchUrl !== '') {
+            console.log('[ENV FALLBACK] Using SEARCH_URL from environment');
+            if (!global.__envCache__) global.__envCache__ = {};
+            global.__envCache__.SEARCH_URL = searchUrl;
+        } else {
+            log('ERROR', 'web_search', 'config_error', 'SEARCH_URL не указан в .env');
+            return JSON.stringify({ error: "SEARCH_URL не указан в .env" });
+        }
     }
 
+    log('INFO', 'web_search', 'request', `query: ${args.query}`);
+    
     try {
-        const fullUrl = `${baseUrl}?q=${encodeURIComponent(args.query)}&format=json`;
+        const fullUrl = `${searchUrl}?q=${encodeURIComponent(args.query)}&format=json`;
         
         const response = await fetch(fullUrl);
-        if (!response.ok) throw new Error(`SearXNG вернул ошибку: ${response.status}`);
+        if (!response.ok) throw new Error(`SearXNG error: ${response.status}`);
         
         const data = await response.json();
         
@@ -38,14 +52,16 @@ export async function handler(args) {
         }));
 
         if (!results || results.length === 0) {
-            return JSON.stringify({ text: "По вашему запросу ничего не найдено." });
+            log('INFO', 'web_search', 'no_results', `query: ${args.query}`);
+            return JSON.stringify({ text: "Не удалось найти результаты поиска." });
         }
 
-        // Format results as readable text
+        log('INFO', 'web_search', 'results', `${results.length} результатов`);
         const text = results.map((r, i) => `${i+1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`).join('\n\n');
         return JSON.stringify({ text: text });
         
     } catch (error) {
-        return JSON.stringify({ error: `Ошибка веб-поиска: ${error.message}` });
+        log('ERROR', 'web_search', 'error', error.message);
+        return JSON.stringify({ error: `Ошибка поиска-запроса: ${error.message}` });
     }
 }

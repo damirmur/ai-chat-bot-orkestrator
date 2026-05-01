@@ -1,3 +1,5 @@
+import { log } from '../logger.mjs';
+
 export const definition = {
     type: "function",
     function: {
@@ -22,16 +24,13 @@ let yfInstance = null;
 async function getYf() {
     if (yfInstance) return yfInstance;
     
-    // Динамически импортируем весь модуль
     const module = await import('yahoo-finance2');
     
-    // Пытаемся найти конструктор в разных местах (зависит от сборки библиотеки)
     const Constructor = module.YahooFinance || module.default?.YahooFinance || module.default;
     
     try {
         yfInstance = new Constructor();
     } catch (e) {
-        // Если это не конструктор, значит объект уже готов к работе
         yfInstance = Constructor;
     }
     
@@ -44,15 +43,15 @@ export async function handler(args) {
         const yf = await getYf();
 
         if (args.type === "current") {
-            console.log(`[get_finance_data] Запрос: ${symbol}`);
+            log('INFO', 'yahoo_finance', 'request', `current: ${symbol}`);
             
             const quote = await yf.quote(symbol);
-            console.log(`[get_finance_data] Результат:`, quote ? Object.keys(quote) : 'пусто');
+            log('INFO', 'yahoo_finance', 'quote_received', Object.keys(quote).length + ' fields');
             
             if (!quote) return JSON.stringify({ error: "Данные не найдены" });
             
             const price = quote.regularMarketPrice ?? quote.bid ?? quote.ask ?? quote.previousClose ?? quote.lastPrice ?? quote.close;
-            console.log(`[get_finance_data] Цена: ${price}`);
+            log('INFO', 'yahoo_finance', 'price', `${price}`);
             
             if (!price) return JSON.stringify({ error: "Цена не найдена", symbol });
             
@@ -70,14 +69,14 @@ export async function handler(args) {
             if (args.startDate && args.endDate) {
                 startDate = new Date(args.startDate);
                 endDate = new Date(args.endDate);
-                console.log(`[get_finance_data] historical: ${args.startDate} -> ${args.endDate}, symbol=${symbol}`);
+                log('INFO', 'yahoo_finance', 'historical', `${args.startDate} -> ${args.endDate}, symbol=${symbol}`);
             } else {
                 endDate = new Date();
                 if (range === '1mo') startDate = new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
                 else if (range === '1y') startDate = new Date(endDate.getTime() - 365 * 24 * 60 * 60 * 1000);
                 else if (range === '5y') startDate = new Date(endDate.getTime() - 1825 * 24 * 60 * 60 * 1000);
                 else startDate = new Date(endDate.getTime() - 365 * 24 * 60 * 60 * 1000);
-                console.log(`[get_finance_data] historical: range=${range}, symbol=${symbol}`);
+                log('INFO', 'yahoo_finance', 'historical_range', `range=${range}, symbol=${symbol}`);
             }
 
             const result = await yf.chart(symbol, { period1: startDate, period2: endDate, interval: '1mo' });
@@ -86,10 +85,11 @@ export async function handler(args) {
                 dateLabel: q.date.toLocaleString('ru-RU', { month: 'short', year: '2-digit' }),
                 price: q.close?.toFixed(2)
             }));
-            console.log(`[get_finance_data] history: ${history.length} months, from ${history[0]?.date} to ${history[history.length-1]?.date}`);
+            log('INFO', 'yahoo_finance', 'history', `${history.length} months, from ${history[0]?.date} to ${history[history.length-1]?.date}`);
             return JSON.stringify({ symbol, history, currency: 'USD', startDate: args.startDate, endDate: args.endDate, url: `https://yahoo.com${symbol}/chart` });
         }
     } catch (error) {
+        log('ERROR', 'yahoo_finance', 'error', error.message);
         return JSON.stringify({ error: `Ошибка модуля финансов: ${error.message}` });
     }
 }

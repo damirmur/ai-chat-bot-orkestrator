@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
-  "scripts": {
-    "start": "node vk-bot.mjs",
-    "dev": "node --watch --watch-path=.env vk-bot.mjs *> bot.log",
+"scripts": {
+    "start": "node index.mjs",
+    "terminal": "node index.mjs --chat",
+    "dev:bot": "node --watch index.mjs",
+    "dev:term": "node --watch index.mjs --chat",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -16,6 +18,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "openai": "^6.34.0",
     "sharp": "^0.34.5",
+    "temporal-polyfill": "^0.3.2",
     "vk-io": "^4.10.1",
     "yahoo-finance2": "^3.14.0"
   }

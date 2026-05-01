@@ -1,82 +1,33 @@
-# VK Chat Bot Orchestrator
+# MCP Servers
 
-Умный VK-бот с интеграцией LM Studio и оркестратором задач.
+A lightweight Node.js orchestration framework that connects user interfaces (VK bot, terminal) with LLMs and a set of utility tools (weather, time, rendering, …).
 
-## Возможности
+## Quick Start
+1. **Copy environment variables**
+   ```bash
+   cp .env_example .env
+   ```
+   Fill in `OPENAI_API_KEY` and VK credentials if you plan to run the VK bot.
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
+3. **Run an interface**
+   - VK bot: `npm run start`
+   - Terminal chat: `npm run terminal`
+   - Development (auto‑restart on changes): `npm run dev:bot` or `npm run dev:term`
 
-- **Оркестратор задач** — выполняет цепочки шагов (получить данные → обработать → вывести)
-- **Графики** —柱状图 (SVG → PNG, локальная генерация)
-- **Таблицы** — таблицы с зеброй (SVG → PNG)
-- **Авто-определение** — сам выбирает график или таблицу по типу данных
-- **Множественные изображения** — несколько графиков/таблиц в одном сообщении
+## Project Structure
+See **ARCHITECTURE.md** for a detailed diagram of directories and data flow.
 
-## Быстрый старт
+## Adding a New Tool
+1. Create `tools/<name>.mjs` exporting an async function that receives a single `args` object and returns a JSON‑serialisable value.
+2. No registration is needed – an empty `tools.config.json` loads every file in `tools/` automatically.
+3. Use the tool from prompts by mentioning its name; the orchestrator will route the call.
 
-```bash
-npm install
-npm start
-```
+## State & Logs
+- Runtime state is persisted in `state.json`. Do **not** edit it while the server is running.
+- Logs are written to `logs/` with ISO timestamps.
 
-## Настройка (.env)
-
-```env
-VK_TOKEN=your_vk_token
-GROUP_ID=your_group_id
-CHAT_PEER_ID=your_chat_id
-LM_STUDIO_URL=http://localhost:1234
-MODEL_NAME=local-model
-```
-
-## Примеры использования
-
-### График
-```
-Покажи курс биткоина за год
-```
-
-### Таблица
-```
-Покажи курс биткоина за год таблицей
-```
-
-### График + Таблица
-```
-Покажи курс биткоина за год графиком и таблицей
-```
-
-## Архитектура
-
-```
-vk-bot.mjs          → точка входа, прием сообщений
-orchestrator/
-  handler.mjs      → парсит JSON-план, управляет выполнением
-  executor.mjs     → выполняет план шаг за шагом
-  response.mjs     → формирует ответы (текст/изображения)
-tools/             → инструменты (web_search, get_finance_data, draw_chart, ...)
-agents/            → агенты (agent_data_request, ...)
-```
-
-## Как это работает
-
-1. **Пользователь пишет** → VK → `vk-bot.mjs`
-2. **Модель (LM Studio)** анализирует запрос и возвращает либо текст, либо JSON-план с шагами (инструментами)
-3. **Executor** выполняет шаги плана, вызывая соответствующие функции
-4. **Handler** обрабатывает результаты: текст отправляется в чат, графики/таблицы сохраняются как изображения
-5. **При ошибке** система делает до 5 попыток с перепланированием
-
-### Типы запросов:
-- **Текстовые** — модель отвечает напрямую
-- **С инструментами** — план вызывает web_search, get_finance_data и др.
-- **Через агентов** — сложные запросы, где агент сам вызывает другие инструменты
-- **Смешанные** — результат содержит и текст, и изображения
-
-## Tech Stack
-
-- Node.js + ESM
-- VK-IO (VK API)
-- Sharp (SVG → PNG)
-- LM Studio (local LLM)
-
-## Лицензия
-
-MIT
+## Tests
+`npm test` is a placeholder – the repo currently has no automated tests.

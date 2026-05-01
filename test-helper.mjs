@@ -62,40 +62,65 @@ await loadTools();
 
 // Function to query LM Studio
 async function askLM(messages, useTools = true) {
-    const body = {
-        model: process.env.MODEL_NAME || "local-model",
-        messages: messages,
-        temperature: 0.3,
-        max_tokens: 1500,
-        // Do NOT pass tools - force model to return JSON text only
-        // The system prompt already lists all available tools
-    };
-    
-    const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + API_TOKEN
-        },
-        body: JSON.stringify(body)
-    });
-    
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    
-    const message = data.choices[0].message;
-    
-    // If model used tool_calls instead of JSON, convert to our format
-    if (message.tool_calls && message.tool_calls.length > 0) {
-        console.log(`[TEST] Fallback: model used tool_calls (${message.tool_calls.length} шт), converting...`);
-        const steps = message.tool_calls.map(tc => ({
-            tool: tc.function.name,
-            args: JSON.parse(tc.function.arguments)
-        }));
-        return { content: JSON.stringify({ steps }) };
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const body = {
+            model: process.env.MODEL_NAME || "local-model",
+            messages: messages,
+            temperature: 0.3,
+            max_tokens: 1500,
+            // Do NOT pass tools - force model to return JSON text only
+            // The system prompt already lists all available tools
+        };
+        
+        console.log(`[askLM] attempt ${attempt}/3`);
+        const res = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + API_TOKEN
+            },
+            body: JSON.stringify(body)
+        });
+        
+        const data = await res.json();
+        if (data.error) {
+            lastError = new Error(data.error.message);
+            console.error(`[askLM] API error attempt ${attempt}:`, data.error.message);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+        }
+        
+        const message = data.choices?.[0]?.message;
+        if (!message) {
+            lastError = new Error('No choices in response');
+            console.error(`[askLM] No choices attempt ${attempt}`);
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+        }
+        
+        // If model used tool_calls instead of JSON, convert to our format
+        if (message.tool_calls && message.tool_calls.length > 0) {
+            console.log(`[TEST] Fallback: model used tool_calls (${message.tool_calls.length} шт), converting...`);
+            const steps = message.tool_calls.map(tc => ({
+                tool: tc.function.name,
+                args: JSON.parse(tc.function.arguments)
+            }));
+            return { content: JSON.stringify({ steps }) };
+        }
+        
+        // Retry if content is empty
+        if (!message.content || message.content.trim() === '') {
+            console.warn(`[askLM] Empty content attempt ${attempt}, retrying...`);
+            lastError = new Error('Empty content');
+            if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
+            continue;
+        }
+        
+        return message;
     }
     
-    return message;
+    throw lastError || new Error('askLM failed: all retries exhausted');
 }
 
 toolsHandlers.askLM = askLM;
