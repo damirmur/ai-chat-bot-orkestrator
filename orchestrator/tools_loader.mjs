@@ -3,6 +3,7 @@
  * Auto-discovers and loads all .mjs files from tools/ directory
  */
 
+import { log } from '../logger.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -91,16 +92,16 @@ function wrapHandlerWithEnvFallback(originalHandler, envVars) {
                 const value = process.env[envVar];
                 if (value !== undefined && value !== '') {
                     cachedValues.set(envVar, value);
-                    console.log(`[ENV FALLBACK] Using ${envVar} from environment`);
+                    log('INFO', 'ORCHESTRATOR', 'env_loaded_from_env', `${envVar}`);
                     filledArgs[envVar] = value;
                 } else {
                     // Try to use cached value if available
                     const cachedValue = cachedValues.get(envVar);
                     if (cachedValue) {
-                        console.log(`[ENV FALLBACK] Using ${envVar} from cache`);
+                        log('INFO', 'ORCHESTRATOR', 'env_loaded_from_cache', `${envVar}`);
                         filledArgs[envVar] = cachedValue;
                     } else {
-                        console.warn(`[ENV WARN] ${envVar} is not set in process.env and not available in cache`);
+                        log('WARN', 'ORCHESTRATOR', 'env_not_set', `${envVar} is not set`);
                     }
                 }
             }
@@ -157,12 +158,12 @@ export async function loadAllTools(basePath = 'tools') {
             throw new Error(`No .mjs files found in ${basePath} or tls`);
         }
 
-        console.log(`[TOOLS LOADER] Found ${uniqueFiles.length} tool file(s)`);
+        log('INFO', 'ORCHESTRATOR', 'tools_discovered_count', `Found ${uniqueFiles.length} tool file(s)`);
 
         for (const file of uniqueFiles) {
             const filePath = path.join(cwd, file.split('/').slice(0, -1).join('/'), file.split('/').pop());
             
-            console.log(`[TOOLS LOADER] Loading: ${file}`);
+            log('INFO', 'ORCHESTRATOR', 'tool_loading_start', `Loading: ${file}`);
             
             try {
                 const module = await import('file://' + filePath.replace(/\\/g, '/'));
@@ -214,17 +215,17 @@ export async function loadAllTools(basePath = 'tools') {
  */
 function validateDefinition(definition, fileName) {
     if (!definition.type || definition.type !== 'function') {
-        console.warn(`[TOOLS LOADER] Warning in ${fileName}: missing or invalid "type" field`);
+        log('WARN', 'ORCHESTRATOR', 'tool_missing_type', `Warning in ${fileName}: missing or invalid "type" field`);
     }
 
     if (definition.function && !definition.name && !definition.parameters) {
         const fn = definition.function;
         if (!fn.name || !fn.description || !fn.parameters) {
-            console.warn(`[TOOLS LOADER] Warning in ${fileName}: incomplete function structure`);
+            log('WARN', 'ORCHESTRATOR', 'tool_incomplete_structure', `Warning in ${fileName}: incomplete function structure`);
         }
     } else if (definition.name && definition.parameters) {
         if (!definition.type) {
-            console.warn(`[TOOLS LOADER] Warning in ${fileName}: missing "type" field in flat format`);
+            log('WARN', 'ORCHESTRATOR', 'tool_missing_type_flat', `Warning in ${fileName}: missing "type" field in flat format`);
         }
     }
 
@@ -246,8 +247,7 @@ function getToolName(definition) {
     const name = definition.function?.function?.name || 
                   Object.keys(definition.parameters)[0] || 
                   import.meta.filename.replace(/\.mjs$/, '');
-    
-    console.warn(`[TOOLS LOADER] Warning in ${import.meta.filename}: no clear tool name, using fallback: "${name}"`);
+    log('WARN', 'ORCHESTRATOR', 'tool_name_fallback', `Warning: no clear tool name, using fallback: "${name}"`);
     return name;
 }
 
@@ -258,7 +258,7 @@ export function getTool(toolName) {
     const tool = loadedTools.get(toolName);
     
     if (!tool) {
-        console.warn(`[TOOLS LOADER] Tool not found: ${toolName}`);
+        log('WARN', 'ORCHESTRATOR', 'tool_not_found', `Tool not found: ${toolName}`);
         return null;
     }
 

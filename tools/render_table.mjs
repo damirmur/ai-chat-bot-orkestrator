@@ -4,15 +4,15 @@ export const definition = {
     type: "function",
     function: {
         name: "render_table",
-        description: "Сгенерировать SVG-таблицу с чередованием строк (зебра). Возвращает SVG код, который можно конвертировать в PNG через image_converter.",
+        description: "Generate SVG table for data visualization in HTML format. Convert to PNG via image_converter if needed.",
         parameters: {
             type: "object",
             properties: {
                 data: { 
                     type: "array", 
-                    description: "Массив объектов данных" 
+                    description: "Table data array (rows of values)" 
                 },
-                title: { type: "string", description: "Заголовок таблицы" }
+                title: { type: "string", description: "Table header/title text" }
             },
             required: ["data"]
         }

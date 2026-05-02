@@ -4,11 +4,11 @@ export const definition = {
     type: "function",
     function: {
         name: "web_search",
-        description: "Веб-поиск для получения сырых данных. Используйте вместе с fact_extractor для извлечения структурированной информации.",
+        description: "Search the internet to retrieve raw information on any topic. Returns search results as text with URLs.",
         parameters: {
             type: "object",
             properties: {
-                query: { type: "string", description: "Текст для поиска" }
+                query: { type: "string", description: "Search query or text to find information about" }
             },
             required: ["query"]
         }
@@ -20,13 +20,13 @@ export async function handler(args) {
     let searchUrl = args.searchUrl;
     
     if (!searchUrl && global.__envCache__?.SEARCH_URL) {
-        console.log('[ENV FALLBACK] Using SEARCH_URL from global cache');
+        log('WARN', 'web_search', 'env_fallback', 'Using SEARCH_URL from cache');
         searchUrl = global.__envCache__.SEARCH_URL;
     } else if (!searchUrl) {
         searchUrl = process.env.SEARCH_URL;
         
         if (searchUrl !== undefined && searchUrl !== '') {
-            console.log('[ENV FALLBACK] Using SEARCH_URL from environment');
+            log('WARN', 'web_search', 'env_loaded', 'Using SEARCH_URL from environment');
             if (!global.__envCache__) global.__envCache__ = {};
             global.__envCache__.SEARCH_URL = searchUrl;
         } else {

@@ -10,19 +10,19 @@ export const definition = {
     type: "function",
     function: {
         name: "image_converter",
-        description: "Конвертировать SVG данные в PNG изображение. Принимает base64 SVG и возвращает base64 PNG.",
+        description: "Convert SVG data to PNG image format. Accepts base64 encoded SVG and outputs base64 PNG.",
         parameters: {
             type: "object",
             properties: {
                 svgBase64: {
                     type: "string",
-                    description: "SVG данные в формате base64 (без data:image/svg+xml;base64, префикса)"
+                    description: "SVG in base64 encoding (format: data:image/svg+xml;base64,...)"
                 },
                 mimeType: {
                     type: "string",
                     enum: ["image/png", "image/jpeg"],
                     default: "image/png",
-                    description: "Формат выходного изображения"
+                    description: "Output image format (PNG or JPEG)"
                 }
             },
             required: ["svgBase64"]

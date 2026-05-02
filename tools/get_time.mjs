@@ -1,24 +1,28 @@
-import { log } from '../logger.mjs';
-import * as temporal from 'temporal-polyfill';
+﻿// Removed functions: logError, executeCommand, getTimestamp
 
-const Temporal = temporal.Temporal;
+import { log } from '../logger.mjs';
+import * as temporalPolyfill from 'temporal-polyfill';
 
 export const definition = {
-    type: "function",
-    function: {
-        name: "get_system_time",
-        description: "Получить системное время и дату",
-        parameters: {}
-    }
+	name: 'get_time',
+	description: 'Gets the current system time.',
+	requiredInputs: [],
+	optionalInputs: [],
+	outputs: {
+		currentTime: 'string'
+	},
+	canExtractFrom: [],
+	type: 'function',
+	function: {
+		get_system_time() {
+			const currentTime = temporalPolyfill.Instant.now().toString();
+			log(`[get_time] Current time: ${currentTime}`);
+			return { currentTime };
+		}
+	}
 };
 
-export async function handler(args) {
-    try {
-        const time = Temporal.Now.instant().toString();
-        log('INFO', 'get_time', 'result', time);
-        return JSON.stringify({ text: time });
-    } catch (e) {
-        log('ERROR', 'get_time', 'error', e.message);
-        return JSON.stringify({ error: `Ошибка получения времени: ${e.message}` });
-    }
-}
+export const handler = async (inputs) => {
+	const result = definition.function.get_system_time();
+	return result;
+};

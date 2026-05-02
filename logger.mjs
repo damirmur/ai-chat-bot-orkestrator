@@ -1,4 +1,4 @@
-﻿import fs from 'node:fs';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const LOG_DIR = path.join(process.cwd(), 'logs');
@@ -6,7 +6,6 @@ const LOG_DATE = new Date().toISOString().replace(/[:.]/g, '-').replace(/\.\d{3}
 const LOG_FILE = path.join(LOG_DIR, `${LOG_DATE}.log`);
 
 fs.mkdirSync(LOG_DIR, { recursive: true });
-const logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
 
 function format(level, module, event, message) {
     const ts = new Date().toISOString();
@@ -24,65 +23,76 @@ const COLORS = {
 };
 
 const PEER_PREFIX = {
-    'VK-BOT': '[\x1b[36mVK-BOT\x1b[0m]',      // cyan for VK bot
+    'VK': '[\x1b[36mVK\x1b[0m]',       // cyan for VK bot (shortened)
+    'VK-BOT': '[\x1b[36mVK-BOT\x1b[0m]',      // cyan for VK bot  
     'TERMINAL': '[\x1b[32mTERMINAL\x1b[0m]'    // green for terminal chat
 };
 
-// Logger writes to file ONLY, not to console
-// Console is used directly for AI response output
+let logStream = null;
 
-console.log = function (...args) {
-    const source = args[0] || '';
-    const peerId = PEER_PREFIX[source] || '';
-    const msgContent = args.slice(1).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    const message = `${peerId} ${format('INFO', source, '', msgContent)}`;
-    
-    // Write to file only
-    logStream.write(message + '\n');
-};
-
-console.warn = function (...args) {
-    const source = args[0] || '';
-    const peerId = PEER_PREFIX[source] || '';
-    const msgContent = args.slice(1).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    const message = `${peerId} ${format('WARN', source, '', msgContent)}`;
-    
-    // Write to file only
-    logStream.write(message + '\n');
-};
-
-console.error = function (...args) {
-    const source = args[0] || '';
-    const peerId = PEER_PREFIX[source] || '';
-    const msgContent = args.slice(1).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
-    const message = `${peerId} ${format('ERROR', source, '', msgContent)}`;
-    
-    // Write to file only
-    logStream.write(message + '\n');
-};
-
-export function log(level, module, event, message) {
-    let formattedMessage;
-    if (level === 'ERROR') {
-        const peerId = PEER_PREFIX[module] || '';
-        formattedMessage = `${peerId} ${format('ERROR', module, event, message)}`;
-    } else {
-        formattedMessage = format(level, module, event, message);
+async function ensureLogger() {
+    if (!logStream) {
+        try {
+            logStream = fs.createWriteStream(LOG_FILE, { flags: 'a' });
+            await new Promise((resolve, reject) => {
+                logStream.once('open', resolve);
+                logStream.once('error', reject);
+            });
+        } catch (e) {
+            console.error(`Failed to create logger: ${e.message}`);
+        }
     }
-    
-    // Write to file only
-    logStream.write(formattedMessage + '\n');
-};
+}
 
-export function logColor(level, module, event, message, colorKey) {
-    const color = COLORS[colorKey] || '';
-    const peerId = PEER_PREFIX[module] || '';
-    const formattedMsg = format(level, module, event, message);
-    const coloredMessage = `${peerId} ${color}${formattedMsg}${COLORS.reset}`;
-    
-    // Write to file (without colors)
-    logStream.write(coloredMessage + '\n');
-};
+function writeLog(level, module, event, message, isError = false) {
+    return ensureLogger().then(() => {
+        const formattedMessage = format(level, module, event, message);
+        
+        if (isError) {
+            // Errors to both console and file with colors
+            const peerId = PEER_PREFIX[module] || '';
+            logStream.write(`${peerId} ${COLORS.error}${formattedMessage}${COLORS.reset}\n`);
+            console.error(`\x1b[${module === 'TERMINAL' ? '32' : (level === 'ERROR' ? '31' : '36')}]${peerId}${formattedMessage}\x1b[0m`);
+        } else {
+            // Everything else only to file without colors
+            logStream.write(formattedMessage + '\n');
+        }
+    });
+}
+
+function writeLogColor(level, module, event, message, colorKey, isError = false) {
+    return ensureLogger().then(() => {
+        const color = COLORS[colorKey] || '';
+        const peerId = PEER_PREFIX[module] || '';
+        const formattedMsg = format(level, module, event, message);
+        
+        if (isError) {
+            // Errors to both console and file with colors
+            const escapeCode = module === 'TERMINAL' ? 32 : (color || '');
+            logStream.write(`${peerId} ${color}${formattedMsg}${COLORS.reset}\n`);
+            console.error(`\x1b[${escapeCode}]${peerId}${formattedMsg}\x1b[0m`);
+        } else {
+            // Everything else only to file without colors
+            logStream.write(`${peerId} ${formattedMsg}\n`);
+        }
+    });
+}
+
+export async function log(level, module, event, message) {
+    await writeLog(level, module, event, message, false);
+}
+
+export async function logColor(level, module, event, message, colorKey) {
+    await writeLogColor(level, module, event, message, colorKey, false);
+}
+
+export async function error(module, event, message) {
+    await writeLog('ERROR', module, event, message, true);
+}
+
+export async function logWithColors(level, module, event, message, colorKey) {
+    await writeLogColor(level, module, event, message, colorKey, false);
+}
 
 export function getLogFile() {
     return LOG_FILE;
@@ -93,30 +103,24 @@ export function getLogFile() {
  * Call this before process.exit() to avoid libuv assertion errors
  */
 export async function closeLogger() {
-    return new Promise((resolve) => {
-        // Use a timeout as fallback in case the stream doesn't close properly
+    if (!logStream) return Promise.resolve();
+    
+    return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
             try {
                 logStream.destroy();
             } catch (e) {}
             resolve();
-        }, 500);
+        }, 1000);
         
-        try {
-            if (logStream && !logStream.destroyed) {
-                logStream._undrained = false;
-                logStream.end(() => {
-                    clearTimeout(timeout);
-                    // Give a small delay for libuv to clean up handles
-                    setTimeout(() => {
-                        resolve();
-                    }, 50);
-                });
-            } else {
+        if (logStream && !logStream.destroyed) {
+            logStream._undrained = false;
+            logStream.end(() => {
                 clearTimeout(timeout);
-                resolve();
-            }
-        } catch (e) {
+                setTimeout(resolve, 50);
+            });
+            logStream.once('error', reject);
+        } else {
             clearTimeout(timeout);
             resolve();
         }

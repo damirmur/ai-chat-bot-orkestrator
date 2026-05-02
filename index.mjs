@@ -13,6 +13,9 @@ logColor('INFO', 'INDEX', 'startup', `Loading tools and handlers`, 'success');
 
 getLoadedTools().forEach((tool, name) => { global[name] = tool.handler; });
 
+// Экспорт askLM для использования в tools
+global.askLM = askLM;
+
 Object.entries(exportedHandlers).forEach(([name, handler]) => {
     const definition = getLoadedTools().get(name)?.definition;
     if (definition) { global[name] = handler; }
@@ -155,9 +158,44 @@ function getHistory() {
     return [...conversationHistory];
 }
 
+/**
+ * Dynamically generates tool descriptions from loaded tools map
+ * Returns formatted text string to append to system prompt
+ */
+function formatToolsDescription(loadedTools) {
+    const tools = Array.from(loadedTools.values())
+        .map(tool => ({
+            name: tool.definition.function?.name || tool.definition.name || 'unknown',
+            description: tool.definition.description || ''
+        }))
+        .sort((a, b) => a.name.localeCompare('en')); // English alphabetical order
+    
+    if (tools.length === 0) {
+        return '\nNo tools available.\n';
+    }
+    
+    const lines = ['Available tools:'];
+    
+    for (const tool of tools) {
+        lines.push(`- ${tool.name}: ${tool.description}`);
+    }
+    
+    lines.push(''); // Empty line at end
+    
+    return lines.join('\n') + '\n';
+}
+
 async function handleQuery(query, useTools = true) {
     log('DEBUG', 'INDEX', 'query_start', `Starting query for: ${query}`);
-    const SYSTEM_PROMPT = readFileSync('sys.prompt', 'utf-8').trim();
+    
+    // Load base system prompt from file
+    const BASE_PROMPT = readFileSync('sys.prompt', 'utf-8').trim();
+    
+    // Dynamically generate tools description from loaded tools
+    const availableToolsText = formatToolsDescription(getLoadedTools());
+    
+    // Combine prompts with tools information
+    const SYSTEM_PROMPT = `${BASE_PROMPT}\n\n${availableToolsText}`.trim();
     
     // Добавляем сообщение пользователя в историю
     addToHistory('user', query);

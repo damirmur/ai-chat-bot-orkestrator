@@ -1,8 +1,4 @@
-/** 
- * TOOLS CONFIG GENERATOR — Analyzes tools for environment variable dependencies
- * Creates a dynamic config based on discovered process.env usage
- */
-
+import { log } from './logger.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -46,7 +42,7 @@ export async function generateToolsConfig() {
         }
       }
     } catch (e) {
-      console.warn(`[CONFIG] Could not read source for ${name}:`, e.message);
+      log('WARN', 'ORCHESTRATOR', 'config_source_read_error', `Could not read source for ${name}: ${e.message}`);
     }
     
     // Check for process.env dependencies
@@ -81,7 +77,7 @@ export async function generateToolsConfig() {
 export function saveToolsConfigToFile(filePath = 'orchestrator/tools.config.json') {
   const config = generateToolsConfig();
   fs.writeFileSync(filePath, JSON.stringify(config, null, 2));
-  console.log(`[CONFIG] Saved ${Object.keys(config).length} tool configs to ${filePath}`);
+  log('INFO', 'ORCHESTRATOR', 'config_saved', `Saved ${Object.keys(config).length} tool configs to ${filePath}`);
   return config;
 }
 
@@ -90,7 +86,7 @@ export function saveToolsConfigToFile(filePath = 'orchestrator/tools.config.json
  */
 export function loadToolsConfigFromFile(filePath = 'orchestrator/tools.config.json') {
   if (!fs.existsSync(filePath)) {
-    console.warn(`[CONFIG] Config file not found: ${filePath}`);
+    log('WARN', 'ORCHESTRATOR', 'config_file_not_found', `Config file not found: ${filePath}`);
     return generateToolsConfig();
   }
   

@@ -1,95 +1,83 @@
 /**
- * COGNITIVE LOOP ORCHESTRATOR — Full iterative planning implementation
+ * COGNITIVE LOOP ORCHESTRATOR — Model-driven planning implementation
  */
 
+import fs from 'node:fs';
 import { log } from '../logger.mjs';
-import { TOOL_REQUIREMENTS, validateStepChain, canToolAcceptFrom, getIncompatiblePairs } from './tool_requirements.mjs';
-import { TOOL_CATALOG, isToolAtomic } from './tool_catalog.mjs';
 
 // Constants
+const ITERATION_TIMEOUT_MS = 60000; // 60 секунд на шаг
 const MAX_ITERATIONS = 10;
-const ITERATION_TIMEOUT_MS = 30000;
+const STATE_FILE = 'state.json';
 
 /**
- * Main entry point - runs cognitive loop until final result or max iterations
+ * State management helpers
+ */
+export function loadState() {
+    try {
+        if (fs.existsSync(STATE_FILE)) {
+            const content = fs.readFileSync(STATE_FILE, 'utf8');
+            return JSON.parse(content);
+        }
+    } catch (error) {
+        log('ERROR', 'cognitive_loop', 'state_load_error', error.message);
+    }
+
+    return {
+        currentRound: 0,
+        knowledgeBase: [],
+        roundsHistory: [],
+        modelPlans: [],
+        executorResults: []
+    };
+}
+
+export function saveState(state) {
+    try {
+        fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    } catch (error) {
+        log('ERROR', 'cognitive_loop', 'state_save_error', error.message);
+    }
+}
+
+/**
+ * Model-driven planning loop
  */
 export async function handleCognitiveLoop(query, peerId) {
-    log('INFO', 'cognitive_loop', 'started', `Query: ${query.substring(0, 100)}...`);
-    
-    const knowledgeBase = [];
-    let iteration = 0;
-    let currentStepIndex = -1;
-    
+    const state = loadState();
+
     try {
-        while (iteration < MAX_ITERATIONS) {
-            iteration++;
-            
-            // Check for interruption
-            if (!await checkForInterruption(query, peerId)) break;
-            
-            // === ITERATION 1: Self-Analysis (Level 1) ===
-            const analysis = await analyzeState(query, knowledgeBase);
-            
-            log('INFO', 'cognitive_loop', `iteration_${iteration}_analysis`, {
-                iteration,
-                knownFactsCount: analysis.knownFacts?.length || 0,
-                missingData: analysis.missingData || [],
-                canAnswerDirectly: analysis.canAnswerDirectly
-            });
-            
-            // Check if we already have final answer
-            if (analysis.hasFinalResult) {
-                log('INFO', 'cognitive_loop', `iteration_${iteration}_complete`, 'Final result found');
-                break;
+        while (state.currentRound < MAX_ITERATIONS) {
+            await logMessage(`ROUND ${state.currentRound + 1} START`);
+
+            // Шаг 1: Получить plan от модели
+            const modelPlan = await requestModelPlan(query, state);
+            state.modelPlans.push(modelPlan);
+
+            // Шаг 2: Выполнить план через executor
+            const results = await executePlan(modelPlan.steps || [], modelPlan);
+            state.executorResults.push(results);
+
+            // Шаг 3: Обновить knowledge base
+            updateKnowledgeBase(results.results, state.knowledgeBase);
+
+            // Шаг 4: Проверка на завершение
+            if (hasFinalResult(results)) {
+                const response = buildFinalResponse(state.knowledgeBase, query);
+                await logMessage(`ROUND ${state.currentRound + 1} END | Final result found`);
+                return response;
             }
-            
-            // === ITERATION 2: Plan next step (Level 2) ===
-            const plan = await generatePlan(analysis, iteration);
-            
-            if (!plan || !Array.isArray(plan.steps) || plan.steps.length === 0) {
-                log('WARN', 'cognitive_loop', `iteration_${iteration}_no_plan`, 'No valid steps generated');
-                
-                if (iteration >= MAX_ITERATIONS - 1) {
-                    return [{ type: 'text', content: "Я не смог выполнить ваш запрос. Попробуйте сформулировать вопрос по-другому." }];
-                }
-                
-                // Try reformulating and continuing
-                continue;
-            }
-            
-            // === ITERATION 3: Validate step chain ===
-            const validationErrors = validateStepChain(plan.steps);
-            if (validationErrors.length > 0) {
-                log('ERROR', 'cognitive_loop', `iteration_${iteration}_invalid_chain`, 
-                    `${validationErrors[0].message}`);
-                
-                // Plan is invalid — model needs to fix it
-                currentStepIndex = -1;
-                continue;
-            }
-            
-            // === ITERATION 4: Execute steps ===
-            const executionResults = await executePlan(plan.steps, peerId);
-            
-            if (executionResults.hasError) {
-                log('ERROR', 'cognitive_loop', `iteration_${iteration}_exec_failed`, 
-                    `${executionResults.errorDetail}`);
-                
-                currentStepIndex = -1; // Reset to allow model to try different approach
-                continue;
-            }
-            
-            // === ITERATION 5: Update knowledge base and state ===
-            updateKnowledgeBase(executionResults.results, knowledgeBase);
-            
-            if (plan.steps.length > 0) {
-                currentStepIndex = Math.min(currentStepIndex + 1, plan.steps.length - 1);
-            }
+
+            // Шаг 5: Сохранить round
+            saveRoundResults(state.currentRound + 1, modelPlan, results);
+
+            state.currentRound++;
         }
-        
-        // Build final response
-        return buildFinalResponse(knowledgeBase, query);
-        
+
+        // Max iterations reached - return error
+        await logMessage('MAX_ITERATIONS_REACHED');
+        return [{ type: 'text', content: "Не удалось выполнить запрос (превышено количество попыток)" }];
+
     } catch (error) {
         log('ERROR', 'cognitive_loop', 'fatal_error', error.message);
         throw error;
@@ -97,169 +85,204 @@ export async function handleCognitiveLoop(query, peerId) {
 }
 
 /**
- * ITERATION 1: Self-Analysis — What do I know? What's missing?
+ * Функция для запроса плана у модели
  */
-export async function analyzeState(query, knowledgeBase) {
-    const analysis = {
-        query: query.toLowerCase(),
-        knownFacts: [],
-        missingData: [],
-        canAnswerDirectly: false,
-        hasFinalResult: false,
-        suggestedTools: []
+async function requestModelPlan(query, state) {
+    const history = state.roundsHistory.slice(-3); // Последние 3 rounda
+
+    const prompt = `
+Previous query: "${query}"
+Current round: ${state.currentRound + 1}
+
+Available tools: weather_api (requires lat/lon), fact_lookup (requires city name), get_time, web_search, model_tool
+
+IMPORTANT RULES:
+- NEVER include lat/lon in weather_api calls. The model should NOT know coordinates.
+- If weather_api is needed and lat/lon are missing, the orchestrator will add fact_lookup automatically.
+- Only include tool names and their required arguments (like city name for fact_lookup).
+
+Previous results (${history.length} rounds):
+${history.map(h =>
+    `${h.modelPlan}\n-> Results: ${JSON.stringify(h.executorResults)}`
+).join('\n\n')}
+
+Based on the previous results, plan ONLY the tools that need user-provided data (like city names).
+Do NOT try to provide coordinates yourself.
+
+Format: [{"tool": "tool_name", "args": {...}}, ...]
+Example: [{"tool": "weather_api", "args": {"lat": 51.5074, "lon": -0.1278}}]
+
+If you need city coordinates, plan fact_lookup with the city name first:
+Example: [{"tool": "fact_lookup", "args": {"query": "London"}}]
+
+Return ONLY valid JSON, no markdown or explanations.
+    `;
+
+    // Placeholder - replace with actual LLM call
+    const defaultPlan = [{ tool: 'get_time', args: {} }];
+    let plan = { steps: defaultPlan };
+
+    // Auto-complete missing arguments
+    plan = autoCompletePlan(plan, query);
+
+    return plan;
+}
+
+/**
+ * Auto-completion of plan by orchestrator
+ */
+function autoCompletePlan(plan, originalQuery = '') {
+    if (!plan || !Array.isArray(plan.steps)) {
+        return [];
+    }
+
+    // Если weather_api в плане, но нет get_time -> добавить автоматически
+    const hasWeather = plan.steps.some(s => s.tool === 'weather_api');
+    if (hasWeather && !plan.steps.some(s => s.tool === 'get_time')) {
+        plan.steps.push({ tool: 'get_time', args: {} });
+    }
+
+    // Если weather_api требует lat/lon, но их нет -> добавить fact_lookup с исходным запросом
+    const hasMissingCoords = plan.steps.some(s =>
+        s.tool === 'weather_api' && !s.args?.lat && !s.args?.lon
+    );
+    if (hasMissingCoords) {
+
+
+/**
+ * Сохранение round результатов в state.json
+ */
+function saveRoundResults(roundNumber, plan, results) {
+    const roundData = {
+        roundNumber,
+        modelPlan: JSON.stringify(plan),
+        executorResults: results.map(r => ({
+            tool: r.tool,
+            result: r.result || (r.error ? null : undefined),
+            error: r.error || null,
+            isFinal: r.isFinal || false
+        })),
+        timestamp: new Date().toISOString()
     };
-    
-    // Extract user intent from query (basic NLP)
-    const intents = extractIntents(query);
-    
-    for (const intent of intents) {
-        if (intent.type === 'greeting') {
-            analysis.canAnswerDirectly = true;
-            analysis.knownFacts.push('Приветствие — знаю как ответить');
-            
-        } else if (intent.type === 'fact_lookup' && intent.targetCity) {
-            const cityCoords = FACTS.getCoordinates(intent.targetCity);
-            if (cityCoords) {
-                analysis.knownFacts.push(`Координаты ${intent.targetCity}: lat=${cityCoords.lat}, lon=${cityCoords.lon}`);
-                analysis.suggestedTools.push('weather_api');
-                
-                // Check for weather data in knowledge base
-                const hasWeather = knowledgeBase.some(kb => 
-                    kb.sourceTool === 'weather_api' && !kb.isFinalResult
-                );
-                
-                if (hasWeather) {
-                    analysis.missingData.push('Погода уже запрашивается');
-                    analysis.hasFinalResult = true;
-                } else {
-                    analysis.missingData.push(`Погода в ${intent.targetCity}`);
-                    analysis.suggestedTools.push('weather_api');
-                }
-                
-            } else {
-                analysis.knownFacts.push(`${intent.targetCity} не найден в базе фактов`);
-                analysis.missingData.push(`Координаты для ${intent.targetCity}`);
-                analysis.suggestedTools.push(['fact_lookup', 'web_search']);
-            }
-            
-        } else if (intent.type === 'finance' && intent.symbol) {
-            const hasFinanceData = knowledgeBase.some(kb => kb.sourceTool === 'get_finance_data');
-            if (!hasFinanceData) {
-                analysis.missingData.push(`Финансовые данные для ${intent.symbol}`);
-                analysis.suggestedTools.push('get_finance_data');
-            } else {
-                analysis.hasFinalResult = true;
-            }
-            
-        } else if (intent.type === 'simple_reply') {
-            analysis.canAnswerDirectly = true;
-            analysis.knownFacts.push(`Простой вопрос — знаю ответ: ${intent.response}`);
-        }
-    }
-    
-    // Check for negative/forbidden requests
-    if (query.includes('shell_command') || query.includes('команду')) {
-        const hasAccess = checkPeerAccess(peerId);
-        if (!hasAccess) {
-            analysis.knownFacts.push(`peerId ${peerId} не совпадает с USER_ID`);
-            analysis.hasFinalResult = true; // Negative answer is still final
-        }
-    }
-    
-    return analysis;
+
+    state.roundsHistory.push(roundData);
+    saveState(state);
 }
 
 /**
- * ITERATION 2: Generate plan based on analysis
+ * Executor with timeout and error handling
  */
-export async function generatePlan(analysis, iteration) {
-    const steps = [];
-    
-    if (analysis.canAnswerDirectly) {
-        // Simple direct response
-        if (analysis.query.startsWith('привет')) {
-            return [{ tool: 'reply', args: { text: "Привет! Чем могу помочь?" }}];
-        } else if (analysis.knownFacts.some(f => f.includes('простой вопрос'))) {
-            const response = extractSimpleResponse(analysis.query);
-            return [{ tool: 'reply', args: { text: response }}];
-        }
-        
-    } else if (analysis.suggestedTools.length > 0) {
-        // Build chain based on suggested tools
-        
-        // Step 1: Get system time for context
-        steps.push({ tool: 'get_system_time', args: {} });
-        
-        const firstTool = analysis.suggestedTools[0];
-        
-        if (firstTool === 'fact_lookup') {
-            // Find city from query and look up coords
-            const cityMatch = analysis.query.match(/(вашингтон|пекин|лондон|москва)/i);
-            const city = cityMatch ? cityMatch[1].toLowerCase() : 'Вашингтон';
-            
-            steps.push({ 
-                tool: 'fact_lookup', 
-                args: { query: city }
-            });
-            
-        } else if (firstTool === 'get_finance_data') {
-            // Find symbol from query  
-            const symbolMatch = analysis.query.match(/(bitcoin|btc|биткоин)/i);
-            const symbol = symbolMatch ? 'BTC-USD' : 'RUB=X';
-            
-            steps.push({ 
-                tool: 'agent_single_facts', 
-                args: { query: `цена ${symbol}` }
-            });
-            
-        } else if (firstTool === 'web_search') {
-            // Need to find coordinates first before weather
-            const cityMatch = analysis.query.match(/(вашингтон|пекин|лондон)/i);
-            let searchQuery = 'погода';
-            
-            if (cityMatch) {
-                searchQuery += ` ${cityMatch[1]}`;
-            }
-            
-            steps.push({ 
-                tool: 'web_search', 
-                args: { query: searchQuery }
-            });
-        }
-    } else if (analysis.hasFinalResult) {
-        // Already have answer, just need to reply
-        const responses = knowledgeBase.filter(kb => kb.isFinalResult);
-        return [{ tool: 'reply', args: { text: formatResponse(responses) }}];
-    }
-    
-    log('INFO', 'cognitive_loop', `iteration_${iteration}_plan`, JSON.stringify({ steps, iteration }));
-    return steps;
-}
-
-/**
- * ITERATION 4: Execute plan steps
- */
-async function executePlan(steps, peerId) {
+async function executePlan(steps, toolsHandlers = null) {
     const results = [];
-    let hasError = false;
-    
+
     for (const step of steps) {
         try {
-            // Import and call executor
-            const { executeStep } = await import('./executor.mjs');
-            const result = await executeStep(step);
-            
-            log('INFO', 'cognitive_loop', `step_${step.tool}`, `${result.status || 'completed'}`);
+            if (!step.tool) {
+                log('WARN', 'executor', 'missing_tool', `Step missing tool definition: ${JSON.stringify(step)}`);
+                continue;
+            }
+
+            // Валидация обязательных параметров перед вызовом
+            const validationResult = validateToolArgs(step.tool, step.args);
+            if (!validationResult.valid) {
+                log('WARN', 'executor', 'missing_args', `${step.tool}: ${validationResult.reason}`);
+                continue;  // Пропустить этот шаг, не выполняя
+            }
+
+            let fn = toolsHandlers?.[step.tool];
+            if (!fn) {
+                const { getLoadedTools } = await import('./tools_loader.mjs');
+                const loaded = getLoadedTools().get(step.tool);
+                if (loaded) fn = loaded.handler;
+            }
+
+            if (typeof fn !== 'function') {
+                throw new Error(`Tool handler for '${step.tool}' not found or not a function`);
+            }
+
+            // Вызов инструмента с таймаутом 60s
+            const result = await executeStepWithTimeout({ step, toolsHandlers }, 60000);
             results.push(result);
-            
-        } catch (e) {
-            hasError = true;
-            log('ERROR', 'cognitive_loop', 'step_execution_error', `${step.tool}: ${e.message}`);
-            break;
+
+        } catch (error) {
+            log('ERROR', 'executor', 'step_error', `${step.tool}: ${error.message}`);
+            results.push({
+                tool: step?.tool || 'unknown',
+                error: error.message,
+                status: 'failed'
+            });
+
+            if (isCriticalError(error)) {
+                throw error;
+            }
         }
     }
-    
-    return { results, hasError };
+
+    return results;
+}
+
+/**
+ * Валидация обязательных параметров инструмента перед вызовом
+ */
+function validateToolArgs(toolName, args) {
+    const requiredParams = {
+        'weather_api': ['lat', 'lon'],
+        'fact_lookup': ['query']
+    };
+
+    if (!requiredParams[toolName]) {
+        return { valid: true };
+    }
+
+    for (const param of requiredParams[toolName]) {
+        const value = args?.[param];
+
+        // Проверка на null, undefined или пустую строку
+        if (value === null || value === undefined ||
+            (typeof value === 'string' && value.trim() === '')) {
+            return {
+                valid: false,
+                reason: `Missing required parameter '${param}'`
+            };
+        }
+    }
+
+    return { valid: true };
+}
+
+/**
+ * Функция выполнения с таймаутом
+ */
+async function executeStepWithTimeout(step, toolsHandlers = null, timeoutMs = 60000) {
+    const result = await Promise.race([
+        (async () => {
+            if (!toolsHandlers) {
+                throw new Error('No toolsHandlers provided');
+            }
+
+            let fn = toolsHandlers[step.tool];
+            if (!fn) {
+                throw new Error(`Tool not found: ${step.tool}`);
+            }
+
+            return await fn(step.args, toolsHandlers);
+        })(),
+
+        // Timeout handler
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Step timeout after ${timeoutMs}ms`)), timeoutMs)
+        )
+    ]);
+
+    return result;
+}
+
+/**
+ * Проверка критических ошибок
+ */
+function isCriticalError(error) {
+    const criticalErrors = ['Timeout', 'Tool not found', 'Tool handler not found'];
+    return criticalErrors.some(msg => error.message.includes(msg));
 }
 
 /**
@@ -268,7 +291,7 @@ async function executePlan(steps, peerId) {
 function updateKnowledgeBase(results, knowledgeBase) {
     for (const result of results) {
         const question = getQuestionFromTool(result.tool);
-        
+
         if (!result.error && !result.result?.error) {
             knowledgeBase.push({
                 stepNumber: knowledgeBase.length + 1,
@@ -278,9 +301,8 @@ function updateKnowledgeBase(results, knowledgeBase) {
                 sourceTool: result.tool
             });
         } else if (result.error || result.result?.error) {
-            // Negative results are still final answers
             knowledgeBase.push({
-                stepNumber: knowledgeBase.length + 1, 
+                stepNumber: knowledgeBase.length + 1,
                 question: question,
                 answer: `Ошибка: ${result.error || result.result.error}`,
                 isFinalResult: true,
@@ -291,106 +313,63 @@ function updateKnowledgeBase(results, knowledgeBase) {
 }
 
 /**
- * Build final response from completed entries
+ * Проверка на финальный результат
  */
-export function buildFinalResponse(knowledgeBase, query) {
+function hasFinalResult(results) {
+    return results.some(r => r.isFinal === true || !r.error);
+}
+
+/**
+ * Построение ответа
+ */
+function buildFinalResponse(knowledgeBase, query) {
     const finalEntries = knowledgeBase.filter(kb => kb.isFinalResult === true);
-    
+
     if (finalEntries.length === 0) {
         return [{ type: 'text', content: "Я не смог найти ответ на ваш запрос. Попробуйте уточнить вопрос." }];
     }
-    
+
     const firstText = finalEntries.find(e => e.answer?.type === 'text');
     const firstImage = finalEntries.find(e => e.answer?.type === 'image');
-    const hasWeather = finalEntries.some(e => 
+    const hasWeather = finalEntries.some(e =>
         e.sourceTool === 'weather_api' && e.answer?.temperature
     );
-    
+
     if (firstText) {
         return [{ type: 'text', content: firstText.answer.text || firstText.answer }];
     } else if (firstImage) {
         return [{ type: 'image', data: firstImage.answer.data }];
     } else if (hasWeather) {
         const weatherEntry = finalEntries.find(e => e.sourceTool === 'weather_api');
-        return [{ 
-            type: 'text', 
-            content: `Погода: ${weatherEntry.answer.temperature}, ${weatherEntry.answer.condition}` 
+        return [{
+            type: 'text',
+            content: `Погода: ${weatherEntry.answer.temperature}, ${weatherEntry.answer.condition}`
         }];
     }
-    
+
     return [];
 }
 
-// === UTILITY FUNCTIONS ===
+/**
+ * Logging helper
+ */
+async function logMessage(message) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${message}`);
 
-function checkForInterruption(query, peerId) {
-    // Placeholder for VK interrupt handling
-    return false;
+    // Сохранение в файл
+    await fs.appendFile(`logs/cognitive_loop_${Date.now()}.log`,
+        `[${timestamp}] ${message}\n`, 'utf8');
 }
 
-function extractIntents(query) {
-    const intents = [];
-    const q = query.toLowerCase();
-    
-    if (/^привет|здравствуй|как дела/i.test(q)) {
-        intents.push({ type: 'greeting' });
-    }
-    
-    if (/(вашингтон|пекин|лондон|москва|париж)/i.test(q) && /погода/i.test(q)) {
-        const cityMatch = q.match(/(вашингтон|пекин|лондон|москва|париж)/i);
-        intents.push({ 
-            type: 'fact_lookup', 
-            targetCity: cityMatch ? cityMatch[1] : ''
-        });
-    }
-    
-    if (/(bitcoin|btc|биткоин)/i.test(q) || /(доллар|евро)/i.test(q)) {
-        intents.push({ type: 'finance' });
-    }
-    
-    if (/привет/i.test(q)) {
-        intents.push({ 
-            type: 'simple_reply', 
-            response: "Привет! Чем могу помочь?"
-        });
-    }
-    
-    return intents;
-}
-
-const FACTS = new Map([
-    ['вашингтон', { lat: 38.9072, lon: -77.0369 }],
-    ['пекин', { lat: 39.9042, lon: 116.4074 }],
-    ['лондон', { lat: 51.5074, lon: -0.1278 }],
-    ['париж', { lat: 48.8566, lon: 2.3522 }]
-]);
-
-FACTS.getCoordinates = function(city) {
-    const key = city.toLowerCase();
-    return FACTS.has(key) ? FACTS.get(key) : null;
-};
-
-function checkPeerAccess(peerId) {
-    // In real implementation, compare with USER_ID from env
-    return false; // Default: no access for testing
-}
-
-function extractSimpleResponse(query) {
-    if (query.includes('привет')) return "Привет! Чем могу помочь?";
-    return "Хорошо, спасибо!";
-}
-
-function formatResponse(entries) {
-    const text = entries.map(e => e.answer).join('\n');
-    return text.substring(0, 3500);
-}
-
+/**
+ * Utility functions
+ */
 function getQuestionFromTool(toolName) {
     const map = {
         'get_system_time': 'Текущее время?',
         'fact_lookup': 'Факт о городе?',
         'weather_api': 'Погода в регионе?',
-        'agent_single_facts': 'Финансовые данные?',
         'web_search': 'Поисковые результаты?'
     };
     return map[toolName] || `${toolName} результат`;
@@ -398,17 +377,16 @@ function getQuestionFromTool(toolName) {
 
 function extractAnswerFromResult(result) {
     if (!result.result) return null;
-    
+
     try {
         const parsed = typeof result.result === 'string' ? JSON.parse(result.result) : result.result;
-        
-        // Extract text content
+
         let answer = '';
         if (parsed.text) answer = parsed.text;
         else if (parsed.temperature) answer = `Температура: ${parsed.temperature}, Условия: ${parsed.condition || ''}`;
         else if (parsed.price) answer = `Цена: $${Number(parsed.price).toLocaleString()}`;
         else answer = JSON.stringify(parsed);
-        
+
         return { type: 'text', text: answer };
     } catch (e) {
         return result.result;

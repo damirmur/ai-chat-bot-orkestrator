@@ -2,11 +2,11 @@ export const definition = {
     type: "function",
     function: {
         name: "reply",
-        description: "Вернуть текстовый ответ пользователю. Используйте для ВСЕХ ответов, включая приветствия и простые вопросы.",
+        description: "Send a direct text response to the user. Use for simple answers or when no external data is needed.",
         parameters: {
             type: "object",
             properties: {
-                text: { type: "string", description: "Текст ответа пользователю" }
+                text: { type: "string", description: "Text message content to send to user" }
             },
             required: ["text"]
         }

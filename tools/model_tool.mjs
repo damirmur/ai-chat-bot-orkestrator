@@ -4,18 +4,18 @@ export const definition = {
     type: "function",
     function: {
         name: "model_tool",
-        description: "Использовать модель для обработки текста: перевод, анализ, форматирование, резюме, факты (fact_lookup), извлечение данных (fact_extractor). Для точных фактов использовать fact_lookup action, для обработки сырых данных - fact_extractor action.",
+        description: "Use AI model for text processing tasks including translation, summarization, analysis, formatting, data extraction using fact_extractor action, and reference data queries using fact_lookup action.",
         parameters: {
             type: "object",
             properties: {
                 action: {
                     type: "string",
                     enum: ["translate", "summarize", "analyze", "format", "extract", "fact_lookup", "compare", "explain", "rewrite"],
-                    description: "Действие: translate - перевод, summarize - резюме, analyze - анализ, format - форматирование, extract - извлечение данных, fact_lookup — запрос справочных данных (координаты, столицы), compare - сравнение, explain - объяснение, rewrite - перефразирование"
+                    description: "Action to perform: translate=text translation, summarize=create summary, analyze=text analysis, format=structure text, extract=extract key data/facts, fact_lookup=query reference data, compare=simple comparison, explain=simplify explanation, rewrite=rephrase"
                 },
-                text: { type: "string", description: "Текст для обработки" },
-                target_lang: { type: "string", description: "Целевой язык для перевода (ru, en, и т.д.)" },
-                targetField: { type: "string", description: "Тип данных для извлечения при fact_extractor action" }
+                text: { type: "string", description: "Input text to process or query about" },
+                target_lang: { type: "string", description: "Target language for translation (e.g., en, ru)" },
+                targetField: { type: "string", description: "Data field type for fact_extractor action (e.g., coordinates, prices)" }
             },
             required: ["action", "text"]
         }
@@ -23,17 +23,22 @@ export const definition = {
 };
 
 export async function handler(args, toolsHandlers) {
-    const askLM = toolsHandlers.askLM;
-    const { action, text, target_lang, targetField } = args;
+    // Try to get askLM from toolsHandlers first (when called via executor)
+    let askLM = null;
     
-    console.log(`[model_tool] action: ${action}, text length: ${text?.length || 0}`);
+    if (toolsHandlers && typeof toolsHandlers.askLM === 'function') {
+        askLM = toolsHandlers.askLM;
+    }
+    else if (global.askLM && typeof global.askLM === 'function') {
+        askLM = global.askLM;
+    }
+    
+    const { action, text, target_lang, targetField } = args;
     
     if (!text) {
         log('WARN', 'model_tool', 'no_text', 'Текст не передан');
         return JSON.stringify({ error: "Текст не передан" });
     }
-    
-    console.log(`[model_tool] action: ${action}, text length: ${text?.length || 0}`);
     
     let prompt;
     
@@ -99,8 +104,6 @@ ${isCoordsQuery ? 'Пример для координат: {"lat": 38.9072, "lon
             { role: 'user', content: prompt }
         ], false);
         
-        console.log(`[model_tool] Результат: ${result.content?.substring(0, 100)}...`);
-        
         if (action === 'fact_lookup') {
             try {
                 const jsonResult = JSON.parse(result.content || '{}');
@@ -115,7 +118,7 @@ ${isCoordsQuery ? 'Пример для координат: {"lat": 38.9072, "lon
         return JSON.stringify({ text: result.content });
         
     } catch (e) {
-        console.error(`[model_tool] Ошибка: ${e.message}`);
+        log('ERROR', 'model_tool', 'error', `Ошибка: ${e.message}`);
         return JSON.stringify({ error: e.message });
     }
 }

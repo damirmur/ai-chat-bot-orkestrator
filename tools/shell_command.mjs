@@ -8,13 +8,13 @@ export const definition = {
     type: "function",
     function: {
         name: "shell_command",
-        description: "Выполнить команду в командной строке. ДОСТУПЕН ТОЛЬКО если peerId == USER_ID. Для всех остальных — сообщите что действие недоступно.",
+        description: "Execute system commands in a sandboxed environment for file operations and system tasks. State is saved per peerId (USER_ID). Common commands: 'dir', 'ls', 'whoami'.",
         parameters: {
             type: "object",
             properties: {
-                command: { type: "string", description: "Команда для выполнения (например 'dir', 'ls', 'whoami')" },
-                peerId: { type: "string", description: "peerId отправителя запроса для проверки доступа" },
-                userId: { type: "string", description: "USER_ID из системного контекста" }
+                command: { type: "string", description: "System command to execute (e.g., 'dir', 'ls', 'whoami')" },
+                peerId: { type: "string", description: "Unique identifier for the user session" },
+                userId: { type: "string", description: "User ID from USER_ID environment variable" }
             },
             required: ["command", "peerId", "userId"]
         }

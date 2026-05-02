@@ -91,11 +91,14 @@ export async function handleRequest(query, toolsHandlers, askLM, systemPrompt, p
         ];
         
         const response = await askLM(history);
+        
+        log('DEBUG', 'handler', 'response_raw', JSON.stringify(response));
+        
         let responseText = response.content || '';
         
-        log('INFO', 'handler', 'model_response', `Ответ модели (${responseText.length} символов): ${responseText.substring(0, 300)}`);
+        log('INFO', 'handler', 'model_response_text', `text (${responseText.length}): ${responseText.substring(0, 200)}`);
         
-        if (!responseText && response.tool_calls && response.tool_calls.length > 0) {
+        if (response.tool_calls && response.tool_calls.length > 0) {
             log('INFO', 'handler', 'fallback', `использую tool_calls (${response.tool_calls.length} шт)`);
             
             const planFromCalls = {

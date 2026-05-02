@@ -5,18 +5,18 @@ export const definition = {
     type: "function",
     function: {
         name: "api_formatter",
-        description: "Преобразует извлечённые данные в формат конкретного API. Принимает extractedData и targetTool.",
+        description: "Transform extracted data into a specific API format. Accepts extractedData and targetTool parameters to format coordinates or financial symbols.",
         parameters: {
             type: "object",
             properties: {
                 extractedData: {
                     type: "string",
-                    description: "JSON строка с данными от fact_extractor"
+                    description: "JSON string containing extracted data from fact_extractor"
                 },
                 targetTool: {
                     type: "enum",
                     enum: ["weather_api", "get_finance_data"],
-                    description: "Целевой инструмент"
+                    description: "Target tool to format data for (API name)"
                 }
             },
             required: ["extractedData", "targetTool"]

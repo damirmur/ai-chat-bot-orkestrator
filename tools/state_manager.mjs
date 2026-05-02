@@ -6,18 +6,18 @@ export const definition = {
     type: "function",
     function: {
         name: "state_manager",
-        description: "Позволяет модели запрашивать информацию о доступных инструментах во время планирования.",
+        description: "Allow model to query available tools at runtime. Actions include list_tools, get_tool_info, and check_atomicity.",
         parameters: {
             type: "object",
             properties: {
                 action: {
                     type: "enum",
                     enum: ["list_tools", "get_tool_info", "check_atomicity"],
-                    description: "Действие для получения информации"
+                    description: "Action to perform: list_tools=show all tools, get_tool_info=get details about a tool, check_atomicity=verify if tool runs independently"
                 },
                 toolName: {
                     type: "string",
-                    description: "Название инструмента (для get_tool_info и check_atomicity)"
+                    description: "Tool name for get_tool_info and check_atomicity actions"
                 }
             },
             required: ["action"]

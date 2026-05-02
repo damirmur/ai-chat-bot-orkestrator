@@ -24,8 +24,15 @@ export function initTerminalChat(handleQuery) {
     process.on('SIGINT', () => {
         logColor('INFO', 'TERMINAL', 'shutdown', 'Received SIGINT, shutting down...', 'success');
         console.log('\n\x1b[33m' + '='.repeat(50) + '\x1b[0m');
-        rl.close();
-        process.exit(0);
+    });
+    
+    process.on('SIGTERM', () => {
+        logColor('INFO', 'TERMINAL', 'shutdown', 'Received SIGTERM, shutting down...', 'success');
+        console.log('\n\x1b[33m' + '='.repeat(50) + '\x1b[0m');
+    });
+    
+    rl.on('close', () => {
+        stopChat();
     });
 }
 
@@ -44,6 +51,16 @@ export async function startChat() {
 }
 
 /**
+ * Завершает чат и очищает ресурсы
+ */
+export function stopChat() {
+    if (!isRunning) return;
+    isRunning = false;
+    log('INFO', 'TERMINAL', 'chat_stopped', 'Chat session stopped');
+    rl.close();
+}
+
+/**
  * Обрабатывает ввод пользователя
  */
 async function processInput(input) {
@@ -54,7 +71,10 @@ async function processInput(input) {
     
     log('DEBUG', 'TERMINAL', 'user_input', `User input: ${input}`);
     
-    if (input.toLowerCase() === 'quit' || input.toLowerCase() === 'exit') {
+    // Check for quit/exit commands (with or without / prefix)
+    const normalizedInput = input.toLowerCase().trim();
+    if (normalizedInput === 'quit' || normalizedInput === 'exit' || 
+        normalizedInput.startsWith('/quit') || normalizedInput.startsWith('/exit')) {
         console.log('\n\x1b[33mGoodbye! Chat session ended.\x1b[0m');
         isRunning = false;
         rl.close();

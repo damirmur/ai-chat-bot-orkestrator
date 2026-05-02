@@ -4,13 +4,13 @@ export const definition = {
     type: "function",
     function: {
         name: "date_period",
-        description: "Вычислить массив дат для периода. period: \"2025\" - год, \"2025-03\" - месяц, \"2025-03-15\" - день. range: \"1y\" - последние 12 месяцев, \"5y\" - 5 лет, \"1mo\" - месяц. target: \"chart\" - для графика, \"table\" - для таблицы.",
+        description: "Generate date arrays for periods. period='2025' (year), '2025-03' (month), '2025-03-15' (day). range='1y', '5y', '1mo' for relative ranges from today.",
         parameters: {
             type: "object",
             properties: {
-                period: { type: "string", description: "Период: \"2025\", \"2025-03\", \"2025-03-15\"" },
-                range: { type: "string", enum: ["1mo", "1y", "5y"], description: "Относительный период от текущей даты" },
-                target: { type: "string", enum: ["chart", "table"], description: "Формат вывода" }
+                period: { type: "string", description: "Date period format: YYYY, YYYY-MM, or YYYY-MM-DD" },
+                range: { type: "string", enum: ["1mo", "1y", "5y"], description: "Relative range from current date (1 month, 1 year, or 5 years)" },
+                target: { type: "string", enum: ["chart", "table"], description: "Output format for visualization" }
             }
         }
     }

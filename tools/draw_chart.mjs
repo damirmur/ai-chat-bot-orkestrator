@@ -4,14 +4,14 @@ export const definition = {
     type: "function",
     function: {
         name: "draw_chart",
-        description: "Визуализировать данные в виде SVG-графики (столбчатая диаграмма). Возвращает SVG код, который можно конвертировать в PNG через image_converter.",
+        description: "Generate SVG charts for visualization (line, bar, area). Convert to base64 PNG via image_converter if needed.",
         parameters: {
             type: "object",
             properties: {
-                title: { type: "string", description: "Заголовок графика (например: Золото USD)" },
-                labels: { type: "array", items: { type: "string" }, description: "Подписи по оси X (даты)" },
-                values: { type: "array", description: "Массив массивов для нескольких серий: [[1,2,3],[4,5,6]]" },
-                legend: { type: "array", items: { type: "string" }, description: "Названия серий для легенды" }
+                title: { type: "string", description: "Chart title with optional currency format: BTC-USD" },
+                labels: { type: "array", items: { type: "string" }, description: "X-axis data points (dates, categories)" },
+                values: { type: "array", description: "Y-axis numeric data for each series: [[1,2,3],[4,5,6]]" },
+                legend: { type: "array", items: { type: "string" }, description: "Data series labels (optional)" }
             },
             required: ["title"]
         }
